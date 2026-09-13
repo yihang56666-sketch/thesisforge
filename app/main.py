@@ -324,16 +324,17 @@ def create_run(req: CreateRunReq):
         if not req.text_column or req.text_column == req.target:
             raise HTTPException(400, "请在高级选项中选择文本列与标签列")
 
-    script = "train_torch.py" if task == "image_classification" else "train_sklearn.py"
-    if script == "train_torch.py":
-        # 图像训练依赖 PyTorch；离线整合包与精简 EXE 可能未安装，提前给出可操作的提示
+    engine = spec.get("engine") or "sklearn"
+    script = "train_torch.py" if engine == "torch" else "train_sklearn.py"
+    if engine == "torch":
+        # 神经网络训练依赖 PyTorch；离线整合包与精简 EXE 可能未安装，提前给出可操作的提示
         try:
             has_torch = importlib.util.find_spec("torch") is not None
         except (ImportError, ValueError):
             has_torch = False
         if not has_torch:
-            raise HTTPException(400, "未检测到 PyTorch，无法进行图像分类训练。请运行「安装图像训练-CPU版.bat」"
-                                    "（或 GPU 版），或改用表格/文本任务。")
+            raise HTTPException(400, "未检测到 PyTorch，无法进行神经网络训练。请运行「安装图像训练-CPU版.bat」"
+                                    "（或 GPU 版），或改用传统机器学习模型。")
     # 标签列兜底：未指定时使用最后一列
     target = req.target if task != "image_classification" else None
     if task != "image_classification" and not target:

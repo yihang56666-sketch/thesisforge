@@ -3,6 +3,24 @@ from __future__ import annotations
 
 import math
 
+_TRAINING_PARAMS: dict = {
+    "optimizer": {"type": "choice", "default": "adam",
+                  "options": ["sgd", "sgd_momentum", "adam", "adamw", "rmsprop"],
+                  "label": "优化器"},
+    "lr": {"type": "float", "default": 0.001, "min": 0.00001, "max": 1.0, "label": "学习率"},
+    "batch_size": {"type": "int", "default": 32, "min": 1, "max": 256, "label": "批大小"},
+    "epochs": {"type": "int", "default": 15, "min": 1, "max": 300, "label": "训练轮数"},
+    "scheduler": {"type": "choice", "default": "cosine",
+                  "options": ["cosine", "step", "plateau", "none"], "label": "学习率调度"},
+    "weight_decay": {"type": "float", "default": 0.0, "min": 0.0, "max": 0.5, "label": "权重衰减 L2"},
+    "early_stop_patience": {"type": "int", "default": 0, "min": 0, "max": 100,
+                            "label": "早停耐心(0=关闭)"},
+    "grad_clip": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0,
+                  "label": "梯度裁剪(0=关闭)"},
+    "seed": {"type": "int", "default": 42, "min": 0, "max": 999999, "label": "随机种子"},
+}
+
+
 CATALOG: dict = {
     "tabular_classification": {
         "label": "表格数据 · 分类",
@@ -50,12 +68,15 @@ CATALOG: dict = {
                 },
             },
             "mlp": {
-                "label": "多层感知机 (MLP)",
-                "desc": "全连接神经网络，适合展示深度方法与传统机器学习的对比。",
+                "label": "MLP 神经网络",
+                "desc": "全连接神经网络（可自定义隐藏层/激活/丢弃率），配合优化器与学习率调度训练，适合与机器学习基线对比。",
+                "engine": "torch",
                 "params": {
                     "hidden_sizes": {"type": "string", "default": "128,64", "label": "隐藏层(逗号分隔)"},
-                    "learning_rate_init": {"type": "float", "default": 0.001, "min": 0.00001, "max": 1.0, "label": "学习率"},
-                    "max_iter": {"type": "int", "default": 300, "min": 20, "max": 5000, "label": "最大迭代轮数"},
+                    "activation": {"type": "choice", "default": "relu",
+                                   "options": ["relu", "tanh", "gelu", "leaky_relu"], "label": "激活函数"},
+                    "dropout": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    **_TRAINING_PARAMS,
                 },
             },
         },
@@ -94,6 +115,18 @@ CATALOG: dict = {
                     "max_depth": {"type": "int", "default": 3, "min": 1, "max": 16, "label": "最大深度"},
                 },
             },
+            "mlp": {
+                "label": "MLP 神经网络",
+                "desc": "全连接回归网络，可自定义隐藏层与训练策略，衡量深度方法在回归任务上的表现。",
+                "engine": "torch",
+                "params": {
+                    "hidden_sizes": {"type": "string", "default": "128,64", "label": "隐藏层(逗号分隔)"},
+                    "activation": {"type": "choice", "default": "relu",
+                                   "options": ["relu", "tanh", "gelu", "leaky_relu"], "label": "激活函数"},
+                    "dropout": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    **_TRAINING_PARAMS,
+                },
+            },
         },
     },
     "text_classification": {
@@ -119,6 +152,65 @@ CATALOG: dict = {
                     "C": {"type": "float", "default": 1.0, "min": 0.01, "max": 100, "label": "惩罚系数 C"},
                 },
             },
+            "lstm": {
+                "label": "LSTM 文本分类",
+                "desc": "长短期记忆网络，捕捉序列长期依赖，适合短文本/评论/情感分类等任务。",
+                "engine": "torch",
+                "params": {
+                    "embedding_dim": {"type": "int", "default": 128, "min": 16, "max": 1024, "label": "词向量维度"},
+                    "hidden_dim": {"type": "int", "default": 128, "min": 8, "max": 4096, "label": "隐藏单元数"},
+                    "num_layers": {"type": "int", "default": 1, "min": 1, "max": 8, "label": "RNN 层数"},
+                    "bidirectional": {"type": "bool", "default": True, "label": "双向 LSTM"},
+                    "dropout": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    "max_seq_len": {"type": "int", "default": 128, "min": 4, "max": 2048, "label": "最大序列长度"},
+                    "vocab_size": {"type": "int", "default": 5000, "min": 8, "max": 200000, "label": "词表上限"},
+                    **_TRAINING_PARAMS,
+                },
+            },
+            "gru": {
+                "label": "GRU 文本分类",
+                "desc": "门控循环单元，结构比 LSTM 轻量、训练更快，适合作为循环网络的对照模型。",
+                "engine": "torch",
+                "params": {
+                    "embedding_dim": {"type": "int", "default": 128, "min": 16, "max": 1024, "label": "词向量维度"},
+                    "hidden_dim": {"type": "int", "default": 128, "min": 8, "max": 4096, "label": "隐藏单元数"},
+                    "num_layers": {"type": "int", "default": 1, "min": 1, "max": 8, "label": "RNN 层数"},
+                    "bidirectional": {"type": "bool", "default": True, "label": "双向 GRU"},
+                    "dropout": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    "max_seq_len": {"type": "int", "default": 128, "min": 4, "max": 2048, "label": "最大序列长度"},
+                    "vocab_size": {"type": "int", "default": 5000, "min": 8, "max": 200000, "label": "词表上限"},
+                    **_TRAINING_PARAMS,
+                },
+            },
+            "textcnn": {
+                "label": "TextCNN 文本分类",
+                "desc": "多尺寸卷积核并行提取局部 n-gram 特征，训练快，是文本分类经典深度基线。",
+                "engine": "torch",
+                "params": {
+                    "embedding_dim": {"type": "int", "default": 128, "min": 16, "max": 1024, "label": "词向量维度"},
+                    "num_filters": {"type": "int", "default": 64, "min": 8, "max": 1024, "label": "卷积核数量"},
+                    "kernel_sizes": {"type": "string", "default": "2,3,4", "label": "卷积核尺寸(逗号分隔)"},
+                    "dropout": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    "max_seq_len": {"type": "int", "default": 128, "min": 4, "max": 2048, "label": "最大序列长度"},
+                    "vocab_size": {"type": "int", "default": 5000, "min": 8, "max": 200000, "label": "词表上限"},
+                    **_TRAINING_PARAMS,
+                },
+            },
+            "transformer": {
+                "label": "轻量 Transformer",
+                "desc": "多头自注意力编码器（含位置编码与掩码池化），覆盖最新深度学习架构文本路线。",
+                "engine": "torch",
+                "params": {
+                    "d_model": {"type": "int", "default": 128, "min": 16, "max": 1024, "label": "模型维度"},
+                    "nhead": {"type": "int", "default": 4, "min": 1, "max": 64, "label": "注意力头数"},
+                    "num_layers": {"type": "int", "default": 2, "min": 1, "max": 16, "label": "Encoder 层数"},
+                    "dim_feedforward": {"type": "int", "default": 256, "min": 32, "max": 4096, "label": "前馈维度"},
+                    "dropout": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    "max_seq_len": {"type": "int", "default": 128, "min": 4, "max": 2048, "label": "最大序列长度"},
+                    "vocab_size": {"type": "int", "default": 5000, "min": 8, "max": 200000, "label": "词表上限"},
+                    **_TRAINING_PARAMS,
+                },
+            },
         },
     },
     "image_classification": {
@@ -129,22 +221,25 @@ CATALOG: dict = {
             "cnn": {
                 "label": "CNN (3层卷积网络)",
                 "desc": "轻量卷积神经网络（Conv-BN-ReLU×3 + 全连接），训练快，适合小数据集与教学演示。",
+                "engine": "torch",
                 "params": {
-                    "epochs": {"type": "int", "default": 15, "min": 1, "max": 300, "label": "训练轮数"},
-                    "batch_size": {"type": "int", "default": 32, "min": 2, "max": 256, "label": "批大小"},
-                    "lr": {"type": "float", "default": 0.001, "min": 0.00001, "max": 1.0, "label": "学习率"},
+                    "conv_channels": {"type": "string", "default": "32,64,128", "label": "卷积通道(逗号分隔)"},
+                    "activation": {"type": "choice", "default": "relu",
+                                   "options": ["relu", "tanh", "gelu", "leaky_relu"], "label": "激活函数"},
+                    "dropout": {"type": "float", "default": 0.3, "min": 0.0, "max": 0.95, "label": "丢弃率"},
                     "image_size": {"type": "int", "default": 64, "min": 16, "max": 224, "label": "图像尺寸"},
+                    **_TRAINING_PARAMS,
                 },
             },
             "resnet18": {
                 "label": "ResNet18 (可迁移学习)",
                 "desc": "经典残差网络，可加载 ImageNet 预训练权重做迁移学习，中小型图像数据集首选。",
+                "engine": "torch",
                 "params": {
-                    "epochs": {"type": "int", "default": 15, "min": 1, "max": 300, "label": "训练轮数"},
-                    "batch_size": {"type": "int", "default": 32, "min": 2, "max": 256, "label": "批大小"},
-                    "lr": {"type": "float", "default": 0.001, "min": 0.00001, "max": 1.0, "label": "学习率"},
                     "image_size": {"type": "int", "default": 64, "min": 16, "max": 224, "label": "图像尺寸"},
                     "pretrained": {"type": "bool", "default": True, "label": "加载ImageNet预训练"},
+                    "freeze_backbone": {"type": "bool", "default": False, "label": "冻结骨干只训分类头"},
+                    **_TRAINING_PARAMS,
                 },
             },
         },
@@ -167,7 +262,8 @@ def get_model_spec(task: str, model: str) -> dict | None:
     m = t["models"].get(model)
     if not m:
         return None
-    return {"task": task, "model": model, "label": m["label"], "desc": m["desc"], "params": m["params"]}
+    return {"task": task, "model": model, "label": m["label"], "desc": m["desc"],
+            "engine": m.get("engine") or "sklearn", "params": m["params"]}
 
 
 def _coerce(pschema: dict, raw):

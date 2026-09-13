@@ -118,7 +118,7 @@ git commit -m "feat: 通用 PyTorch 训练引擎（优化器/调度/早停/评�
 - Modify: `tests/test_catalog.py`
 - Modify: `tests/test_main.py`
 
-- [ ] **Step 1: 扩展模型 schema**
+- [x] **Step 1: 扩展模型 schema**
 
 - `tabular_classification.models.mlp` 改为 `engine: torch`，参数换为架构（hidden_sizes/activation/dropout）+ 训练策略（optimizer/lr/batch_size/epochs/...）。
 - `tabular_regression.models` 新增 `mlp`（engine torch）。
@@ -126,7 +126,7 @@ git commit -m "feat: 通用 PyTorch 训练引擎（优化器/调度/早停/评�
 - `image_classification.models.cnn/resnet18` 标记 `engine: torch` 并补充训练策略/架构参数。
 - 保持现有测试不破坏：`all_models_flat`、`sanitize_params`、choice/bool 规则不变。
 
-- [ ] **Step 2: create_run 按 engine 派发**
+- [x] **Step 2: create_run 按 engine 派发**
 
 ```text
 engine = spec.get("engine") or "sklearn"
@@ -136,7 +136,7 @@ engine == "torch" 时检测 torch 可用，否则返回可操作的安装提示
 
 新增测试：torch 模型中 `script` 为 `train_torch.py`；旧 sklearn 模型仍为 `train_sklearn.py`。
 
-- [ ] **Step 3: 运行测试并提交**
+- [x] **Step 3: 运行测试并提交**
 
 ```bash
 python -m pytest tests/test_catalog.py tests/test_main.py -q
@@ -150,22 +150,24 @@ git commit -m "feat: 目录覆盖全部神经网络并支持引擎自动派发"
 - Modify: `app/train_torch.py`
 - Run: 全量测试 + compileall + 浏览器冒烟（可选）
 
-- [ ] **Step 1: 重写 `train_torch.py`**
+- [x] **Step 1: 重写 `train_torch.py`**
 
 薄入口：解析 `--run-dir`，调用 `trainer.train_from_run_dir`，保留退出码与 failed 日志契约。
+另修复了分类评估 NaN 问题：sklearn 指标标签集改为整数类别索引，并在 `_write_json`/`emit` 统一做
+非有限浮点转 null，保证 `summary.json`/`metrics.jsonl` 始终是合法 JSON。
 
-- [ ] **Step 2: 冒烟验证**
+- [x] **Step 2: 冒烟验证**
 
 用内置 Wine 数据集 + `tabular_classification/mlp` 建一个假 run_dir 并直接跑 `train_from_run_dir` 2 epochs，确认日志、summary、best.pt、曲线图齐全。
 
-- [ ] **Step 3: 全量回归**
+- [x] **Step 3: 全量回归**
 
 ```bash
 python -m pytest tests -q
 python -m compileall -q app packaging
 ```
 
-- [ ] **Step 4: 提交收尾**
+- [x] **Step 4: 提交收尾**
 
 ```bash
 git add app/train_torch.py docs/superpowers/plans/2026-09-13-sprint2-train-engine.md

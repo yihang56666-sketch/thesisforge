@@ -107,6 +107,29 @@ class ExperimentApiTest(unittest.TestCase):
         self.assertEqual(captured["config"]["group"], "baseline")
         self.assertEqual(captured["config"]["note"], "第一组")
 
+    def test_create_run_dispatches_by_engine(self):
+        scripts = []
+
+        def fake_create(config, script):
+            scripts.append(script)
+            rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            d = runner.run_dir_of(rid)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "config.json").write_text(json.dumps(config, ensure_ascii=False),
+                                           encoding="utf-8")
+            (d / "status.json").write_text(json.dumps({"state": "running"}),
+                                           encoding="utf-8")
+            return rid
+
+        with mock.patch.object(runner, "create_run", side_effect=fake_create):
+            for model in ("logistic_regression", "mlp"):
+                r = self.client.post("/api/runs", json={
+                    "dataset_id": "apitest-ds", "task": "tabular_classification",
+                    "model": model, "params": {},
+                }, headers=self.headers)
+                self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(scripts, ["train_sklearn.py", "train_torch.py"])
+
     def test_patch_meta_updates_config(self):
         rid = "20260913-101500-ca1a1a"
         _make_run(rid, name="旧名字", group="baseline", note="旧备注")

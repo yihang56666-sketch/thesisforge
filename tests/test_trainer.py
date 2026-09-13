@@ -3,6 +3,7 @@ import _isolate  # noqa: F401
 
 import importlib.util
 import json
+import math
 import unittest
 import uuid
 
@@ -91,6 +92,11 @@ class TrainerTest(unittest.TestCase):
         self.assertTrue(any(x["type"] == "summary" for x in metrics))
         summary = json.loads((d / "summary.json").read_text(encoding="utf-8"))
         self.assertGreater(summary["metrics"]["accuracy"], 0)
+        for k, v in summary["metrics"].items():
+            self.assertIsInstance(v, (int, float), k)
+            self.assertFalse(math.isnan(v), k)
+            self.assertTrue(math.isfinite(v), k)
+        self.assertNotIn("NaN", (d / "summary.json").read_text(encoding="utf-8"))
         self.assertIn("primary_metric", summary)
         self.assertTrue((d / "best.pt").exists())
         self.assertTrue((d / "curves.png").exists())

@@ -25,6 +25,38 @@ class CatalogShapeTest(unittest.TestCase):
         total = sum(len(t["models"]) for t in catalog.CATALOG.values())
         self.assertEqual(len(flat), total)
 
+    def test_torch_models_have_engine(self):
+        torch_models = [
+            ("tabular_classification", "mlp"),
+            ("tabular_regression", "mlp"),
+            ("text_classification", "lstm"),
+            ("text_classification", "gru"),
+            ("text_classification", "textcnn"),
+            ("text_classification", "transformer"),
+            ("image_classification", "cnn"),
+            ("image_classification", "resnet18"),
+        ]
+        for task, model in torch_models:
+            with self.subTest(task=task, model=model):
+                spec = catalog.get_model_spec(task, model)
+                self.assertEqual(spec["engine"], "torch")
+        self.assertEqual(
+            catalog.get_model_spec("tabular_classification", "logistic_regression")["engine"],
+            "sklearn",
+        )
+
+    def test_torch_strategy_params_sanitized(self):
+        spec = catalog.get_model_spec("tabular_classification", "mlp")
+        out = catalog.sanitize_params(spec, {
+            "hidden_sizes": "16,8", "activation": "gelu", "optimizer": "evil",
+            "epochs": 99999, "dropout": 2.0,
+        })
+        self.assertEqual(out["hidden_sizes"], "16,8")
+        self.assertEqual(out["activation"], "gelu")
+        self.assertEqual(out["optimizer"], "adam")
+        self.assertEqual(out["epochs"], 300)
+        self.assertEqual(out["dropout"], 0.95)
+
 
 class SanitizeParamsTest(unittest.TestCase):
     def setUp(self):

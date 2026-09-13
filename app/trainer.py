@@ -56,7 +56,19 @@ def _safe(base: Path, name: str) -> Path:
 
 
 def _write_json(path: Path, obj) -> None:
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(_json_safe(obj), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _json_safe(obj):
+    """把非有限浮点（NaN/Inf）转成 null，保证产物始终是合法 JSON。"""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        v = float(obj)
+        return None if not np.isfinite(v) else v
+    return obj
 
 
 def _log(msg: str) -> None:
@@ -561,7 +573,8 @@ def fit(config: dict, run_dir) -> dict:
     def emit(event: dict) -> None:
         events.append(event)
         _safe(run_dir, "metrics.jsonl").write_text(
-            "\n".join(json.dumps(e, ensure_ascii=False) for e in events), encoding="utf-8"
+            "\n".join(json.dumps(_json_safe(e), ensure_ascii=False) for e in events),
+            encoding="utf-8",
         )
 
     _log(f"任务: {task} | 模型: {model_key} | 策略: optimizer={st['optimizer']}, "
@@ -665,7 +678,6 @@ def fit(config: dict, run_dir) -> dict:
     if classification:
         classes = data["classes"]
         labels_all = sorted(set(ev["labels"]) | set(ev["preds"]))
-        labels_all = [c for c in classes if c in labels_all]
         cm = np.zeros((len(classes), len(classes)), dtype=int)
         for p_, l_ in zip(ev["preds"], ev["labels"]):
             if 0 <= l_ < len(classes) and 0 <= p_ < len(classes):
@@ -796,8 +808,8 @@ def train_from_run_dir(run_dir) -> int:
         err = traceback.format_exc()
         _log("训练失败:\n" + err)
         _safe(run_dir, "status.json").write_text(
-            json.dumps({"state": "failed", "error": err[-1500:],
-                        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+            json.dumps(_json_safe({"state": "failed", "error": err[-1500:],
+                                   "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}),
                        ensure_ascii=False), encoding="utf-8",
         )
         return 1
