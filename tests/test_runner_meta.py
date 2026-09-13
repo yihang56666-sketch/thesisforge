@@ -13,8 +13,13 @@ class ReadMetaTest(unittest.TestCase):
         d = runner.run_dir_of(rid)
         d.mkdir(parents=True, exist_ok=True)
         (d / "config.json").unlink(missing_ok=True)
-        self.assertEqual(runner.read_meta(rid),
-                         {"name": "", "group": "baseline", "note": ""})
+        meta = runner.read_meta(rid)
+        self.assertEqual(meta["name"], "")
+        self.assertEqual(meta["group"], "baseline")
+        self.assertEqual(meta["note"], "")
+        self.assertEqual(meta["batch_id"], "")
+        self.assertEqual(meta["batch_kind"], "")
+        self.assertIsNone(meta["repeat_index"])
 
     def test_invalid_group_falls_back_to_baseline(self):
         rid = "20260913-101500-a1b2c4"
@@ -22,6 +27,20 @@ class ReadMetaTest(unittest.TestCase):
         d.mkdir(parents=True, exist_ok=True)
         (d / "config.json").write_text(json.dumps({"group": "oops"}), encoding="utf-8")
         self.assertEqual(runner.read_meta(rid)["group"], "baseline")
+
+    def test_meta_exposes_batch_fields(self):
+        rid = "20260913-101500-abcd01"
+        d = runner.run_dir_of(rid)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.json").write_text(json.dumps({
+            "name": "B", "group": "improved", "note": "n",
+            "batch_id": "abc123", "batch_kind": "repeats", "repeat_index": 3,
+        }), encoding="utf-8")
+        (d / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+        meta = runner.read_meta(rid)
+        self.assertEqual(meta["batch_id"], "abc123")
+        self.assertEqual(meta["batch_kind"], "repeats")
+        self.assertEqual(meta["repeat_index"], 3)
 
 
 class UpdateMetaTest(unittest.TestCase):

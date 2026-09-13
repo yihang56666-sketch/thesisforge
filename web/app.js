@@ -505,7 +505,7 @@ function runsTable(runs) {
   return `<table class="data"><thead><tr><th>实验 ID</th><th>名称 / 分组</th><th>数据集</th><th>模型</th><th>状态</th><th>主指标</th><th>时间</th></tr></thead>
     <tbody>${runs.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}">
       <td class="small muted">${esc(r.run_id)}</td>
-      <td><div class="cell-main">${esc(r.name || r.model_label || r.model || r.run_id)}</div><div class="cell-sub mt4">${groupBadge(r.group)}</div></td>
+      <td><div class="cell-main">${esc(r.name || r.model_label || r.model || r.run_id)}</div><div class="cell-sub mt4">${groupBadge(r.group)}${r.batch_kind ? `<span class="batch-chip small">${r.batch_kind === "repeats" ? "重复" : "消融"}</span>` : ""}</div></td>
       <td>${esc(r.dataset_name || "-")}</td><td>${esc(r.model_label || r.model || "-")}</td>
       <td>${statusText(r.state)}</td>
       <td>${r.primary_metric ? `<b>${esc(r.primary_metric.name)}</b> = ${fmtNum(r.primary_metric.value)}` : "-"}</td>
@@ -561,6 +561,7 @@ async function openRun(id, silent = false) {
           <div class="row-flex"><b>${esc(d.name || ("实验 " + id))}</b>${groupBadge(d.group)}${statusText(d.state)}</div>
           <div class="row-flex">
             ${running ? '<button class="btn danger small" id="btn-cancel">取消训练</button>' : ""}
+            ${d.state === "done" ? '<button class="btn small" id="btn-repeat">重复 3 次</button><button class="btn small" id="btn-ablation">一键消融</button>' : ""}
             <button class="btn small" id="btn-reuse">复用参数</button>
             <button class="btn small" id="btn-run-ai">AI 分析结果</button>
             <button class="btn danger small" id="btn-del">删除</button>
@@ -581,6 +582,7 @@ async function openRun(id, silent = false) {
           数据集 ${esc(d.config.dataset_name || "-")} ｜ 模型 ${esc(d.config.model_label || d.config.model || "-")}
           ｜ 参数 ${esc(fmtParams(d.config.params))}
         </div>
+        ${d.batch_kind ? `<div class="row-flex mt8 small">${groupBadge(d.group)}<span class="batch-chip">${d.batch_kind === "repeats" ? `重复批次 #${esc(d.repeat_index || "")}` : "消融批次"}</span><span class="muted">${esc(d.batch_id || "")}</span></div>` : ""}
         ${d.state === "done" && s.primary_metric ? `<div class="kv-row"><div class="kv"><b style="color:var(--accent);font-size:23px">${fmtNum(s.primary_metric.value)}</b>主指标 ${esc(s.primary_metric.name)}${esc(metricSourceNote(s))}</div>${metricsHtml}
           <div class="kv"><b>${esc(s.n_train || "-")}/${esc(s.n_val || "-")}/${esc(s.n_test || "-")}</b>训练/验证/测试</div>
           <div class="kv"><b>${esc(s.train_time_sec || "-")}s</b>训练用时</div></div>` : ""}
@@ -607,6 +609,79 @@ async function openRun(id, silent = false) {
       };
       toast("参数已填入训练页", "success");
       location.hash = "#/train";
+    };
+    const launchBatch = async (count) => {
+      const btn = $("#btn-repeat");
+      if (btn) { btn.disabled = true; btn.textContent = "提交中…"; }
+      try {
+        const r = await api("/api/experiments/repeats", { method: "POST", body: { run_id: id, count } });
+        toast(`已创建 ${r.run_ids.length} 个重复实验`, "success");
+        state.openRun = null;
+        pageRuns();
+      } catch (e) {
+        toast(e.message, "error");
+        if (btn) { btn.disabled = false; btn.textContent = "重复 3 次"; }
+      }
+    };
+    if ($("#btn-repeat")) $("#btn-repeat").onclick = () => {
+      const c = prompt("重复次数（2-10，默认 3）：", "3");
+      if (c === null) return;
+      const n = parseInt(c, 10);
+      if (!n || n < 2 || n > 10) return toast("次数需在 2-10 之间", "error");
+      launchBatch(n);
+    };
+    if ($("#btn-ablation")) $("#btn-ablation").onclick = () => {
+      if (d.state !== "done") return;
+      const params = d.config.params || {};
+      const spec = (((state.models || {})[d.config.task]) || {}).models?.[d.config.model] || {};
+      const rows = Object.entries(params).map(([k, base]) => {
+        const ps = (spec.params || {})[k] || {};
+        let opts;
+        if (ps.type === "bool") opts = [true, false].filter((v) => v !== base);
+        else if (ps.type === "choice") opts = (ps.options || []).filter((v) => v !== base);
+        else if (typeof base === "number") {
+          const step = (typeof ps.step === "number" && ps.step > 0) ? ps.step : (Math.abs(base) >= 1 ? 1 : 0.05);
+          const scale = Math.abs(base) >= 1 ? Math.max(step, Math.abs(base) * 0.1) : step;
+          opts = [base * 0.5, base * 1.5, base + scale, base - scale]
+            .map((v) => Math.round(v * 10000) / 10000)
+            .filter((v) => (typeof ps.min !== "number" || v >= ps.min) &&
+                            (typeof ps.max !== "number" || v <= ps.max))
+            .filter((v, i, arr) => arr.indexOf(v) === i)
+            .filter((v) => v !== base);
+        } else opts = [];
+        if (!opts.length) return "";
+        return `<div class="form-row"><label>${esc(ps.label || k)}（当前 ${esc(String(base))}）</label>
+          <div class="ablation-opts">${opts.map((v) => `<label class="chip-check"><input type="checkbox" data-p="${esc(k)}" value="${esc(v)}">${esc(String(v))}</label>`).join("")}</div></div>`;
+      }).filter(Boolean).join("");
+      if (!rows) return toast("该实验没有可消融的超参数", "error");
+      const panel = document.createElement("div");
+      panel.className = "panel mt14 ablation-panel";
+      panel.innerHTML = `<b>一键消融</b><div class="hint">每个勾选项派生一个全新实验，只改所选参数，其余参数与源实验一致；派生实验使用独立随机种子。</div>
+        <div class="form-grid mt8">${rows}</div>
+        <div class="row-flex mt8"><button class="btn accent small" id="btn-ablation-go">启动消融实验</button><button class="btn small" id="btn-ablation-cancel">取消</button></div>`;
+      const old = box.querySelector(".ablation-panel");
+      if (old) old.remove();
+      const anchor = $(".meta-box", box) || box.lastElementChild;
+      anchor.after(panel);
+      $("#btn-ablation-cancel").onclick = () => panel.remove();
+      $("#btn-ablation-go").onclick = async () => {
+        const overrides = {};
+        panel.querySelectorAll("input[type=checkbox]:checked").forEach((c) => {
+          let v = c.value;
+          if (v === "true") v = true; else if (v === "false") v = false;
+          else if (v !== "" && !Number.isNaN(Number(v))) v = Number(v);
+          (overrides[c.dataset.p] = overrides[c.dataset.p] || []).push(v);
+        });
+        if (!Object.keys(overrides).length) return toast("请至少勾选一个消融值", "error");
+        const btn = $("#btn-ablation-go");
+        btn.disabled = true; btn.textContent = "提交中…";
+        try {
+          const r = await api("/api/experiments/ablation", { method: "POST", body: { run_id: id, overrides } });
+          toast(`已创建 ${r.run_ids.length} 个消融实验`, "success");
+          state.openRun = null;
+          pageRuns();
+        } catch (e) { toast(e.message, "error"); btn.disabled = false; btn.textContent = "启动消融实验"; }
+      };
     };
     $("#btn-meta-save").onclick = async () => {
       const btn = $("#btn-meta-save");

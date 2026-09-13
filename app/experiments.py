@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import csv
 import io
+import statistics
+import uuid
 
-from . import runner
+from . import catalog, runner
 from .runner import GROUP_ABLATION, GROUP_BASELINE, GROUP_CUSTOM, GROUP_IMPROVED, GROUP_LABELS
 
 GROUP_ORDER = (GROUP_BASELINE, GROUP_IMPROVED, GROUP_ABLATION, GROUP_CUSTOM)
@@ -100,6 +102,14 @@ def _numeric_metrics(summary: dict) -> dict:
     return out
 
 
+def _mean_std(values: list[float]) -> str:
+    """均值±标准差，精度按数值量级自适应，正文/CSV 共用同一字符串。"""
+    mean = float(statistics.fmean(values))
+    std = float(statistics.pstdev(values)) if len(values) > 1 else 0.0
+    prec = 0 if abs(mean) >= 100 else (1 if abs(mean) >= 10 else (2 if abs(mean) >= 1 else 3))
+    return f"{mean:.{prec}f}±{std:.{prec}f}" if len(values) > 1 else f"{mean:.{prec}f}"
+
+
 def build_comparison(run_ids: list[str]) -> dict:
     """只纳入已完成且带 summary 的实验；返回按分组排序的对比数据结构。"""
     experiments = []
@@ -129,41 +139,89 @@ def build_comparison(run_ids: list[str]) -> dict:
             "n_train": s.get("n_train"),
             "n_val": s.get("n_val"),
             "n_test": s.get("n_test"),
+            "batch_id": cfg.get("batch_id"),
+            "batch_kind": cfg.get("batch_kind"),
+            "repeat_index": cfg.get("repeat_index"),
         })
     experiments = sort_runs(experiments, by_metric=True)
 
-    columns = [{
-        "run_id": e["run_id"],
-        "label": e["name"] or e["model_label"] or e["run_id"],
-        "group": e["group"],
-        "group_label": e["group_label"],
-        "model_label": e["model_label"] or e["model"] or "-",
-    } for e in experiments]
+    repeats: dict[str, list[dict]] = {}
+    for e in experiments:
+        if e.get("batch_kind") == BATCH_KIND_REPEATS and e.get("batch_id"):
+            repeats.setdefault(e["batch_id"], []).append(e)
+    for members in repeats.values():
+        members.sort(key=lambda m: (m.get("repeat_index") is None, m.get("repeat_index") or 0, m.get("run_id") or ""))
+
+    columns = []
+    emitted: set[str] = set()
+    for e in experiments:
+        bid = e.get("batch_id")
+        if (e.get("batch_kind") == BATCH_KIND_REPEATS and bid in repeats and len(repeats[bid]) > 1):
+            if bid in emitted:
+                continue
+            emitted.add(bid)
+            members = repeats[bid]
+            columns.append({
+                "run_id": members[0]["run_id"],
+                "run_ids": [m["run_id"] for m in members],
+                "label": (members[0]["name"] or members[0]["model_label"] or members[0]["run_id"]) + f" ×{len(members)}次",
+                "group": members[0]["group"],
+                "group_label": members[0]["group_label"],
+                "model_label": members[0]["model_label"] or members[0]["model"] or "-",
+                "repeat_count": len(members),
+            })
+            continue
+        columns.append({
+            "run_id": e["run_id"],
+            "label": e["name"] or e["model_label"] or e["run_id"],
+            "group": e["group"],
+            "group_label": e["group_label"],
+            "model_label": e["model_label"] or e["model"] or "-",
+            "repeat_count": 1,
+        })
 
     metric_rows = []
     if experiments:
         first = experiments[0]
         first_pm = first["primary_metric"] or {}
-        metric_rows.append({
-            "key": "primary_metric",
-            "label": f"主指标：{first_pm.get('name') or '主指标'}",
-            "is_primary": True,
-            "higher_is_better": _higher_is_better(str(first_pm.get("name") or "")),
-            "values": [(e.get("primary_metric") or {}).get("value") for e in experiments],
-        })
-        pm_key = (first_pm or {}).get("name")
-        extra_keys = []
+        pm_key = first_pm.get("name")
+        keys_order = [pm_key] if pm_key else []
         for e in experiments:
             for k in (e.get("metrics") or {}):
-                if k != pm_key and k not in extra_keys:
-                    extra_keys.append(str(k))
-        for k in extra_keys:
+                if k != pm_key and k not in keys_order:
+                    keys_order.append(str(k))
+        for idx, k in enumerate(keys_order):
+            is_primary = idx == 0 and bool(pm_key)
+            row_values = []
+            n_per_col = []
+            std_only = []
+            for c in columns:
+                rids = c.get("run_ids") or [c.get("run_id")]
+                vals = []
+                for e in experiments:
+                    if e["run_id"] not in rids:
+                        continue
+                    v = (e.get("primary_metric") or {}).get("value") if is_primary else (e.get("metrics") or {}).get(k)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        vals.append(float(v))
+                n_per_col.append(len(vals))
+                if not vals:
+                    row_values.append(None)
+                    std_only.append(None)
+                elif len(vals) > 1:
+                    row_values.append(_mean_std(vals))
+                    std_only.append(statistics.pstdev(vals))
+                else:
+                    row_values.append(vals[0])
+                    std_only.append(None)
             metric_rows.append({
-                "key": k,
-                "label": _metric_label(k),
-                "is_primary": False,
-                "higher_is_better": _higher_is_better(k),
-                "values": [(e.get("metrics") or {}).get(k) for e in experiments],
+                "key": "primary_metric" if is_primary else k,
+                "label": (f"主指标：{pm_key}" if is_primary else _metric_label(k)),
+                "is_primary": is_primary,
+                "higher_is_better": _higher_is_better(str(pm_key if is_primary else k)),
+                "values": row_values,
+                "n": n_per_col,
+                "std": std_only,
             })
 
     # CSV：指标 × 实验，第一行是主指标
@@ -194,3 +252,139 @@ def build_comparison(run_ids: list[str]) -> dict:
         "markdown": md_text,
         "count": len(experiments),
     }
+
+
+BATCH_KIND_REPEATS = "repeats"
+BATCH_KIND_ABLATION = "ablation"
+_BATCH_BASE_SEED = 42
+_BATCH_MAX_SEED = 2**31 - 1
+
+
+def _read_source_config(run_id: str) -> dict:
+    """读取已完成实验的完整配置；未完成/不存在时报错。"""
+    d = runner.run_detail(run_id)
+    if d["state"] != runner.STATUS_DONE:
+        raise ValueError("请先等待源实验训练完成")
+    cfg = d["config"]
+    if not cfg or not cfg.get("task") or not cfg.get("model") or not cfg.get("dataset_id"):
+        raise ValueError("源实验配置不完整，无法批量派生")
+    return dict(cfg)
+
+
+def _coerce_param(spec: dict, key: str, value):
+    """消融参数也走目录白名单与类型约束，和新建实验同一套口径。"""
+    pschema = (spec.get("params") or {}).get(key)
+    if not pschema:
+        raise ValueError(f"参数 {key} 不在模型目录中，无法消融")
+    clean = catalog.sanitize_params({"params": {key: pschema}}, {key: value}).get(key)
+    if clean is None:
+        raise ValueError(f"参数 {key} 的值不合法")
+    return clean
+
+
+def _next_derived_seed(params: dict, batch_id: str, offset: int) -> int:
+    """派生实验保持独立随机性：在批内用 batch_id 派生确定性偏移。"""
+    base = params.get("seed")
+    if base is None:
+        base = _BATCH_BASE_SEED
+    try:
+        base = max(0, min(int(base), _BATCH_MAX_SEED))
+    except (TypeError, ValueError):
+        base = _BATCH_BASE_SEED
+    extra = (int(batch_id, 16) + offset) % 1000
+    return min(base + extra, _BATCH_MAX_SEED)
+
+
+def _next_repeat_seed(seed, offset: int) -> int:
+    """重复实验只在随机种子上加偏移，保证唯一且仍在 int 范围内。"""
+    try:
+        base = max(0, min(int(seed), _BATCH_MAX_SEED))
+    except (TypeError, ValueError):
+        base = _BATCH_BASE_SEED
+    return min(base + offset, _BATCH_MAX_SEED)
+
+
+def _clip_name(name: str, limit: int = 80) -> str:
+    return (name or "").strip()[:limit]
+
+
+def _run_kind(engine: str) -> str:
+    return "train_torch.py" if engine == "torch" else "train_sklearn.py"
+
+
+def create_batch_repeats(source_run_id: str, count: int) -> list[str]:
+    """克隆一个已完成实验，按同一配置跑 count 次，仅随机种子不同。"""
+    count = int(count)
+    if count < 2 or count > 10:
+        raise ValueError("重复次数需在 2-10 之间")
+    base = _read_source_config(source_run_id)
+    spec = catalog.get_model_spec(base.get("task", ""), base.get("model", ""))
+    engine = (spec or {}).get("engine") or "sklearn"
+    base_name = _clip_name(base.get("name") or base.get("model_label") or "重复实验", 62)
+    seed = base.get("random_state") or (base.get("params") or {}).get("seed") or _BATCH_BASE_SEED
+    batch_id = uuid.uuid4().hex
+    run_ids = []
+    for i in range(1, count + 1):
+        cfg = dict(base)
+        cfg.pop("batch_id", None)
+        cfg["name"] = _clip_name(f"{base_name}-重复-{i}")
+        cfg["group"] = runner.GROUP_IMPROVED
+        cfg["note"] = _clip_name((base.get("note") or "") + "；重复实验，仅随机种子不同", 500)
+        cfg["batch_id"] = batch_id
+        cfg["batch_kind"] = BATCH_KIND_REPEATS
+        cfg["repeat_index"] = i
+        cfg["random_state"] = _next_repeat_seed(seed, i - 1)
+        params = dict(base.get("params") or {})
+        if "seed" in params:
+            params["seed"] = _next_repeat_seed(params.get("seed"), i - 1)
+        cfg["params"] = params
+        run_ids.append(runner.create_run(cfg, _run_kind(engine)))
+    return run_ids
+
+
+def _fmt_ablation_value(schema, value) -> str:
+    if schema and schema.get("type") == "bool":
+        return "开启" if value else "关闭"
+    if isinstance(value, float) and value == int(value):
+        return f"{int(value)}"
+    return str(value)
+
+
+def create_batch_ablation(source_run_id: str, overrides: dict[str, list]) -> list[str]:
+    """基于已完成实验，对每个 (参数, 值) 各派生一个只改该参数的新实验。"""
+    if not overrides:
+        raise ValueError("请至少选择一个消融参数")
+    base = _read_source_config(source_run_id)
+    spec = catalog.get_model_spec(base.get("task", ""), base.get("model", ""))
+    engine = (spec or {}).get("engine") or "sklearn"
+    schema = (spec or {}).get("params") or {}
+    base_name = _clip_name(base.get("name") or base.get("model_label") or "消融实验", 50)
+    batch_id = uuid.uuid4().hex
+    run_ids = []
+    for param, values in overrides.items():
+        clean_values = []
+        for value in values:
+            clean = _coerce_param(spec, param, value)
+            if clean not in clean_values:
+                clean_values.append(clean)
+        if not clean_values:
+            raise ValueError(f"参数 {param} 没有可用的消融值")
+        for position, clean in enumerate(clean_values):
+            cfg = dict(base)
+            cfg.pop("batch_id", None)
+            label = (schema.get(param) or {}).get("label") or param
+            pretty = _fmt_ablation_value(schema.get(param), clean)
+            cfg["name"] = _clip_name(f"{base_name}-消融-{label}-{pretty}")
+            cfg["group"] = runner.GROUP_ABLATION
+            cfg["note"] = _clip_name(
+                (base.get("note") or "") + f"；消融：仅修改 {label}={clean}，其余与源实验一致", 500)
+            cfg["batch_id"] = batch_id
+            cfg["batch_kind"] = BATCH_KIND_ABLATION
+            cfg.pop("repeat_index", None)
+            params = dict(base.get("params") or {})
+            params[param] = clean
+            if "seed" in schema:
+                params["seed"] = _next_derived_seed(params, batch_id, position * 100 + len(run_ids))
+            cfg["params"] = params
+            run_ids.append(runner.create_run(cfg, _run_kind(engine)))
+    return run_ids

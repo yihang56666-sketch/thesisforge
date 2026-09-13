@@ -201,6 +201,9 @@ def read_meta(run_id: str) -> dict:
         "name": cfg.get("name") or "",
         "group": cfg.get("group") if cfg.get("group") in GROUPS else GROUP_BASELINE,
         "note": cfg.get("note") or "",
+        "batch_id": str(cfg.get("batch_id") or ""),
+        "batch_kind": str(cfg.get("batch_kind") or ""),
+        "repeat_index": cfg.get("repeat_index"),
     }
 
 
@@ -286,6 +289,9 @@ def list_runs() -> list[dict]:
             "name": meta["name"],
             "group": meta["group"],
             "note": meta["note"],
+            "batch_id": meta["batch_id"],
+            "batch_kind": meta["batch_kind"],
+            "repeat_index": meta["repeat_index"],
             "dataset_name": cfg.get("dataset_name"),
             "task": cfg.get("task"),
             "model": cfg.get("model"),
@@ -316,6 +322,9 @@ def run_detail(run_id: str) -> dict:
         "name": meta["name"],
         "group": meta["group"],
         "note": meta["note"],
+        "batch_id": meta["batch_id"],
+        "batch_kind": meta["batch_kind"],
+        "repeat_index": meta["repeat_index"],
         "config": cfg,
         "summary": summary,
         "metrics_log": read_metrics_log(run_id),

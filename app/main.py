@@ -492,6 +492,34 @@ def compare_experiments(req: CompareReq):
         raise HTTPException(400, str(e))
 
 
+class BatchRepeatsReq(BaseModel):
+    run_id: str
+    count: int = 3
+
+
+class BatchAblationReq(BaseModel):
+    run_id: str
+    overrides: dict[str, list] = {}
+
+
+@app.post("/api/experiments/repeats")
+def batch_repeats(req: BatchRepeatsReq):
+    try:
+        run_ids = experiments.create_batch_repeats(req.run_id, req.count)
+        return {"ok": True, "run_ids": run_ids}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/experiments/ablation")
+def batch_ablation(req: BatchAblationReq):
+    try:
+        run_ids = experiments.create_batch_ablation(req.run_id, req.overrides)
+        return {"ok": True, "run_ids": run_ids}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ================================================================ AIGC 自检与降 AI 味
 class HumanizeCheckReq(BaseModel):
     text: str

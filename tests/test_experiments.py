@@ -109,5 +109,49 @@ class BuildComparisonTest(unittest.TestCase):
         self.assertEqual(r["columns"][0]["group"], "baseline")
 
 
+class RepeatAggregationTest(unittest.TestCase):
+    def test_repeats_same_batch_merge_and_show_mean_std(self):
+        batch = "repbatch-0001"
+        for i, acc in enumerate([0.91, 0.93, 0.95], start=1):
+            rid = f"20260913-101500-{i:06x}"
+            make_run(rid, name=f"改进-MLP-重复-{i}", group="improved", state="done",
+                     model="mlp", model_label="MLP",
+                     metrics={"accuracy": acc, "f1": round(acc - 0.01, 2)},
+                     primary={"name": "accuracy", "value": acc})
+            cfg_path = runner.run_dir_of(rid) / "config.json"
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            cfg["batch_id"] = batch
+            cfg["batch_kind"] = "repeats"
+            cfg["repeat_index"] = i
+            cfg_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        r = experiments.build_comparison([f"20260913-101500-{i:06x}" for i in range(1, 4)])
+        self.assertEqual(r["count"], 3)
+        self.assertEqual(len(r["columns"]), 1)
+        self.assertEqual(r["columns"][0]["label"], "改进-MLP-重复-1 ×3次")
+        self.assertEqual(r["columns"][0]["run_ids"],
+                         [f"20260913-101500-{i:06x}" for i in range(1, 4)])
+        row = r["metric_rows"][0]
+        self.assertTrue(row["is_primary"])
+        self.assertEqual(row["values"], ["0.930±0.016"])
+        self.assertEqual(row["n"], [3])
+        self.assertAlmostEqual(row["std"][0], 0.01632993161856052, places=12)
+
+    def test_partial_repeat_batch_keeps_plain_single_column(self):
+        batch = "repbatch-0002"
+        rid = "20260913-101500-aaaa01"
+        make_run(rid, name="改进-X-重复-1", group="improved", state="done",
+                 metrics={"accuracy": 0.9}, primary={"name": "accuracy", "value": 0.9})
+        cfg_path = runner.run_dir_of(rid) / "config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["batch_id"] = batch
+        cfg["batch_kind"] = "repeats"
+        cfg["repeat_index"] = 1
+        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        r = experiments.build_comparison([rid])
+        self.assertEqual(len(r["columns"]), 1)
+        self.assertEqual(r["columns"][0]["label"], "改进-X-重复-1")
+        self.assertEqual(r["metric_rows"][0]["values"], [0.9])
+
+
 if __name__ == "__main__":
     unittest.main()
