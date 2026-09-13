@@ -60,3 +60,23 @@ def test_project_completion_detection(tmp_path, monkeypatch):
         data["steps"][str(i)]["completed"] = True
     onboarding.save_progress(data)
     assert onboarding.looks_completed_manually(onboarding.load_progress()) is True
+
+
+def test_wizard_api_roundtrip(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from app import main
+
+    monkeypatch.setattr(onboarding, "PROJECT_FILE", tmp_path / "project.json")
+    headers = {"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765"}
+    client = TestClient(main.app)
+    r = client.get("/api/wizard", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["active_step"] == 1
+    body = {
+        "project": {"title": "测试题目"},
+        "steps": {"1": {"state": "done", "completed": True, "saved_at": None}},
+        "active_step": 2,
+    }
+    r2 = client.put("/api/wizard", json=body, headers=headers)
+    assert r2.status_code == 200
+    assert r2.json()["steps"]["1"]["state"] == "done"

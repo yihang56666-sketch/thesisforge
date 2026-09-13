@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, catalog, datasets_hub, experiments, humanize, report, runner
+from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, report, runner
 from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
     ensure_dirs, load_runtime_config, resolve_api_key, save_runtime_config,
@@ -105,6 +105,16 @@ def health():
     except Exception:
         pass
     return info
+
+
+@app.get("/api/wizard")
+def get_wizard():
+    return onboarding.load_progress()
+
+
+@app.put("/api/wizard")
+def put_wizard(payload: dict):
+    return onboarding.save_progress(payload)
 
 
 # ================================================================ AI 设置
