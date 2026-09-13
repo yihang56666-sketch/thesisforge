@@ -1,0 +1,117 @@
+# 毕设工坊 ThesisForge
+
+面向人工智能专业毕业设计的**一站式本地可视化工作台**：找数据集 → 表单化调参训练模型 → 实验留档对比 → AIGC 自检与降 AI 味 → 按学位论文规范一键生成 Word 初稿。全程网页操作，无需写命令行。
+
+> 纯本地运行：数据、实验记录、API Key 都只存在你自己的电脑上（`data/` 目录，已被 gitignore）。
+
+## 界面预览
+
+| 总览（进度清单驱动） | 模型训练（表单调参） |
+| --- | --- |
+| ![总览](docs/screenshots/dashboard.png) | ![训练](docs/screenshots/train.png) |
+| **实验记录（曲线/混淆矩阵/AI 分析）** | **报告工坊（论文生成 + AIGC 自检）** |
+| ![实验](docs/screenshots/run-detail.png) | ![报告](docs/screenshots/report-aigc.png) |
+
+## 功能
+
+- **🗂️ 数据集中心**：6 个内置经典数据集一键载入；导入本地 CSV/Excel/图像 zip；公网直链下载（带 SSRF 防护）；自动 EDA（类别分布、直方图、相关性矩阵、图像样例）+ AI 解读。
+- **🚀 模型训练**：14 个模型覆盖表格分类/回归、文本分类、图像分类；表单化超参数；后台子进程训练，实时日志与曲线；自动使用 GPU（CUDA），无卡自动回退 CPU。
+- **📈 实验记录**：每个实验自动留档（配置/日志/指标/图表/模型文件），支持取消与删除，可多实验对比——毕设的消融实验和对比表直接从这里出。
+- **🤖 AI 分析**：支持任意 OpenAI 兼容接口（DeepSeek/智谱/通义/Kimi/OpenAI）；未配置时自动降级为内置规则分析器，依然可用。
+- **📝 报告工坊**：按学位论文规范生成 `.docx`——目录域、中英文摘要、五章正文、**三线表**、自动插图、GB/T 7714 参考文献、致谢、页眉页码；AI 起草的章节自动去 AI 味。
+- **🧪 AIGC 自检与降 AI 味**：检测段落中的 AI 特征（模板套话/句长均匀度/列表体）并定位问题；规则引擎 + 可选 LLM 深度改写（保持事实数字不变）。详见下方[诚实说明](#关于-aigc-功能的诚实说明)。
+- **🧭 毕设指南**：九步路线图（选题→文献→数据→基线→改进→实验→分析→论文→答辩）+ [常见问题预判清单](docs/ISSUES.md)。
+
+## 安装
+
+### 方式一：Windows 离线整合包（推荐新手）
+
+到 [Releases](../../releases) 下载 `ThesisForge-v0.2.0-win64-offline.zip`（无需安装 Python，解压即用）：
+
+1. 解压到任意目录；
+2. 双击 `启动毕设工坊.bat`；
+3. 浏览器打开 http://127.0.0.1:8765 ，首次会弹出新手引导。
+
+图像分类训练需要 PyTorch：双击包内 `安装图像训练-CPU版.bat`（或 `安装图像训练-GPU版.bat`，需 NVIDIA 显卡）。
+
+### 方式二：从源码运行（Python 3.10+）
+
+```bash
+git clone https://github.com/Yihang56666-sketch/thesisforge.git
+cd thesisforge
+pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+# 或直接双击 start.bat（Windows）
+```
+
+图像训练（可选）：`pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`
+
+### 验证安装
+
+启动服务器后运行 `python test_e2e.py`，会自动跑通表格/文本/图像三条训练路径与报告生成。
+
+## 快速上手（五分钟出第一组结果）
+
+1. **数据集** 页载入「乳腺癌威斯康星」；
+2. **模型训练** 页选逻辑回归 → 开始训练（基线）；
+3. 再换随机森林、GBDT 各跑一次（对比）；
+4. **实验记录** 页点开看曲线和混淆矩阵，点「AI 分析」拿改进建议；
+5. **报告工坊** 勾选实验 → 生成论文初稿；打开文档后 `Ctrl+A → F9` 更新目录。
+
+## AI 接口配置
+
+「AI 设置」页填写 base_url + 模型名 + API Key（仅存本机 `data/runtime_config.json`），或设置环境变量：
+
+```bash
+set LLM_API_KEY=sk-xxxx        # Windows
+export LLM_API_KEY=sk-xxxx     # Linux/macOS
+```
+
+| 服务商 | base_url | 模型示例 |
+| --- | --- | --- |
+| 智谱 AI | https://open.bigmodel.cn/api/paas/v4 | glm-4-flash（有免费额度） |
+| DeepSeek | https://api.deepseek.com/v1 | deepseek-chat |
+| 阿里通义 | https://dashscope.aliyuncs.com/compatible-mode/v1 | qwen-plus |
+| OpenAI | https://api.openai.com/v1 | gpt-4o-mini |
+
+## 关于 AIGC 功能的诚实说明
+
+「降 AI 味」做的是让文字更自然、更有个人风格：删除模板套话、打散均匀句长、把列表体改成连贯段落——这些是 AI 文本检测系统（句长波动、模板短语等信号）重点利用的特征，思路参考开源中文检测项目 [HC3](https://github.com/Hello-SimpleAI/chatgpt-comparison-detection) 与 GPTZero 的 burstiness 原理。**各家检测系统（知网/维普/万方）算法不公开且持续更新，任何工具都无法保证检测结果**。最可靠的做法是把 AI 初稿当参考资料，用自己的话重写，并遵守学校关于 AIGC 使用的规定。
+
+## 目录结构
+
+```
+thesisforge/
+├── app/                 # 后端（FastAPI）
+│   ├── main.py          # 路由与静态页服务
+│   ├── config.py        # 路径与运行时配置（Key 脱敏、环境变量优先）
+│   ├── security.py      # 出站请求 SSRF 防护（拒绝内网/保留地址）
+│   ├── datasets_hub.py  # 数据集载入/导入/下载/EDA
+│   ├── catalog.py       # 模型目录（参数 schema + 论文文案）
+│   ├── runner.py        # 训练作业管理（子进程、取消、日志）
+│   ├── train_sklearn.py # 表格/文本训练脚本
+│   ├── train_torch.py   # 图像训练脚本（CNN/ResNet18 迁移学习）
+│   ├── ai.py            # LLM 客户端 + 内置规则分析器
+│   ├── humanize.py      # AIGC 自检 + 降 AI 味规则引擎
+│   ├── plots.py         # matplotlib 中文图表
+│   └── report.py        # python-docx 论文生成（三线表/域/GB7714）
+├── web/                 # 前端（原生 JS + SVG 图表，无构建步骤）
+├── docs/                # 路线图 / 开源借鉴 / 问题预判 / 截图
+├── data/                # 运行时数据（gitignore，含本地配置与实验记录）
+├── test_e2e.py          # 端到端回归测试
+└── requirements.txt
+```
+
+## 文档
+
+- [毕设全流程路线图](docs/ROADMAP.md)
+- [常见问题预判与对策](docs/ISSUES.md)
+- [开源借鉴清单](docs/REFERENCES.md)
+
+## 许可证
+
+[MIT](LICENSE) — 毕设数据与论文内容版权归使用者本人。
+
+## 致谢
+
+依赖与设计借鉴见 [docs/REFERENCES.md](docs/REFERENCES.md)：scikit-learn、PyTorch、FastAPI、MLflow、Streamlit、HuggingFace、HC3 等优秀开源项目。

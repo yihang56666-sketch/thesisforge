@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>毕设工坊 ThesisForge</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230d6e63'/></svg>">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">
+      <span class="logo-mark"></span>
+      <div>
+        <div class="logo-title">毕设工坊</div>
+        <div class="logo-sub">THESISFORGE</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <a href="#/dashboard" data-route="dashboard"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="1.5" width="5.5" height="5.5"/><rect x="9" y="1.5" width="5.5" height="5.5"/><rect x="1.5" y="9" width="5.5" height="5.5"/><rect x="9" y="9" width="5.5" height="5.5"/></svg><span>总览</span></a>
+      <a href="#/datasets" data-route="datasets"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="8" cy="3.5" rx="6" ry="2.2"/><path d="M2 3.5v9c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2v-9"/><path d="M2 8c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2"/></svg><span>数据集</span></a>
+      <a href="#/train" data-route="train"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2.5v11l9-5.5z"/></svg><span>模型训练</span></a>
+      <a href="#/runs" data-route="runs"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 13.5h13"/><path d="M2.5 10.5l3.5-4 3 2.5 4-5.5"/></svg><span>实验记录</span></a>
+      <a href="#/report" data-route="report"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 1.5h6l3.5 3.5v9.5h-9.5z"/><path d="M9.5 1.5V5H13"/><path d="M5.5 8h5M5.5 10.5h5"/></svg><span>报告工坊</span></a>
+      <a href="#/ai" data-route="ai"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="8" height="8" rx="1"/><path d="M6.5 6.5h3v3h-3z"/><path d="M8 1.5v2.5M8 12v2.5M1.5 8H4M12 8h2.5M3.5 3.5l1.7 1.7M10.8 10.8l1.7 1.7M12.5 3.5l-1.7 1.7M5.2 10.8l-1.7 1.7"/></svg><span>AI 设置</span></a>
+      <a href="#/guide" data-route="guide"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M10.5 5.5l-1.6 3.4-3.4 1.6 1.6-3.4z"/></svg><span>毕设指南</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="sidebar-status" class="sidebar-status">检测环境中…</div>
+      <a id="btn-tour">新手引导</a>
+    </div>
+  </aside>
+  <main id="page" class="page"></main>
+</div>
+<div id="toasts" class="toasts"></div>
+<div id="tour-root"></div>
+<script src="/app.js"></script>
+</body>
+</html>

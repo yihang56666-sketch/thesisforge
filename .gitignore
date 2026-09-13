@@ -1,0 +1,17 @@
+# 运行时数据（含用户 API Key 的本地配置与实验记录，切勿提交）
+data/
+# 本地安全扫描器
+.mimosa/
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# 打包产物
+dist/
+build/
+# 系统/工具
+.DS_Store
+Thumbs.db
+server.log
+.playwright-mcp/
