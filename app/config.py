@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 def _bundle_root() -> Path:
@@ -40,6 +41,7 @@ RUNS_DIR = DATA_DIR / "runs"
 EXPORTS_DIR = DATA_DIR / "exports"
 UPLOADS_DIR = DATA_DIR / "uploads"
 CONFIG_FILE = DATA_DIR / "runtime_config.json"
+LAUNCH_LOG = DATA_DIR / "logs" / "launch.log"
 
 APP_VERSION = "0.3.0"
 
@@ -59,6 +61,35 @@ _lock = threading.Lock()
 def ensure_dirs() -> None:
     for d in (DATA_DIR, DATASETS_DIR, RUNS_DIR, EXPORTS_DIR, UPLOADS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def log_message(message: str) -> None:
+    """把启动/退出/降级等诊断信息追加到 exe 同目录的日志文件。
+
+    EXE 发布为无控制台窗口形态后，print 不会显示给终端用户，日志文件是
+    排查启动问题的唯一落点。任何日志写入失败都不影响主流程。
+    """
+    try:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with _lock:
+            LAUNCH_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with LAUNCH_LOG.open("a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {message}\n")
+    except Exception:
+        pass
+
+
+def notify_fatal(title: str, message: str) -> None:
+    """无控制台窗口形态（PyInstaller --noconsole）下的系统级错误弹窗。"""
+    log_message(f"FATAL {title}: {message}")
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+    except Exception:
+        pass
 
 
 def load_runtime_config() -> dict:

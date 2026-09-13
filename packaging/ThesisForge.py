@@ -14,7 +14,29 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+try:
+    from app.config import log_message, notify_fatal
+except Exception:  # 启动器形态排除了 app 包，这里提供等效的独立实现
+    def log_message(message: str) -> None:
+        try:
+            log_path = Path(sys.executable).resolve().parent / "data" / "logs" / "launch.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+        except Exception:
+            pass
+
+    def notify_fatal(title: str, message: str) -> None:
+        log_message(f"FATAL {title}: {message}")
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+        except Exception:
+            pass
 
 
 def _worker(argv: list[str]) -> int:
@@ -67,10 +89,12 @@ def _run_with_runtime(runtime: Path, exe_dir: Path) -> int:
     if "--no-browser" in sys.argv[1:]:
         env["THESISFORGE_NO_BROWSER"] = "1"
     cmd = [str(runtime), "-u", "-m", "app.main"] + sys.argv[1:]
+    log_message(f"launcher start runtime={runtime} args={' '.join(sys.argv[1:])}")
     try:
         return subprocess.call(cmd, cwd=str(exe_dir), env=env)
     except OSError as e:
-        print(f"[ThesisForge] 无法启动内嵌 Python：{e}", file=sys.stderr)
+        log_message(f"launcher fatal: cannot start embedded python: {e}")
+        notify_fatal("毕设工坊启动失败", f"无法启动内嵌 Python：{e}")
         return 1
 
 
@@ -96,7 +120,8 @@ def main() -> int:
     try:
         from app.main import main
     except ImportError as e:
-        print(f"[ThesisForge] 启动失败，运行库不完整：{e}", file=sys.stderr)
+        log_message(f"launcher fatal: runtime modules incomplete: {e}")
+        notify_fatal("毕设工坊启动失败", f"运行库不完整，无法启动：{e}")
         if not getattr(sys, "frozen", False):
             print("开发环境请使用：python -m app.main", file=sys.stderr)
         return 1

@@ -12,7 +12,7 @@ import threading
 import time
 import webbrowser
 
-from .config import APP_VERSION, DATA_DIR, WEB_DIR
+from .config import APP_VERSION, DATA_DIR, WEB_DIR, log_message, notify_fatal
 from .main import app
 
 try:
@@ -27,10 +27,12 @@ except Exception:  # pragma: no cover
 
 
 def _banner(url: str, mode: str) -> None:
+    log_message(f"start mode={mode} url={url}")
     print(f"毕设工坊 ThesisForge v{APP_VERSION}  ->  {url}  [{mode}]", flush=True)
     print(f"数据目录: {DATA_DIR}", flush=True)
     if not WEB_DIR.exists():
         print("警告：找不到 web/ 静态资源目录，界面将无法显示。", flush=True)
+        log_message("warning: web directory missing")
 
 
 def start_server_thread(host: str = "127.0.0.1", port: int | None = None) -> dict:
@@ -51,6 +53,7 @@ def start_server_thread(host: str = "127.0.0.1", port: int | None = None) -> dic
         time.sleep(0.1)
     if server.should_exit and not server.started:
         thread.join(timeout=5)
+        log_message("error: local server failed to start")
         raise RuntimeError("本地服务启动失败，请检查 8765-8785 端口与运行环境")
     if httpx is not None:
         url = f"http://{host}:{port}/api/health"
@@ -68,6 +71,7 @@ def stop_server(info: dict) -> None:
     thread = info["thread"]
     server.should_exit = True
     thread.join(timeout=10)
+    log_message("server stopped")
 
 
 class DesktopBridge:
@@ -85,59 +89,75 @@ class DesktopBridge:
 
 
 def run_desktop(host: str = "127.0.0.1", port: int | None = None) -> int:
-    info = start_server_thread(host, port)
-    url = info["url"]
-    _banner(url, "desktop")
-    if webview is None:
-        print("未安装 pywebview，改用浏览器打开。", flush=True)
-        return run_browser(port=info["port"], info=info)
     try:
-        webview.create_window(
-            "毕设工坊 ThesisForge",
-            url,
-            width=1280,
-            height=820,
-            min_size=(960, 640),
-            js_api=DesktopBridge(url),
-        )
-        webview.start(private_mode=False)
-    except Exception as e:  # WebView2 缺失等场景
-        print(f"桌面窗口启动失败（{e}），改用浏览器打开。", flush=True)
+        info = start_server_thread(host, port)
+        url = info["url"]
+        _banner(url, "desktop")
+        if webview is None:
+            print("未安装 pywebview，改用浏览器打开。", flush=True)
+            log_message("pywebview missing, fallback to browser")
+            return run_browser(port=info["port"], info=info)
         try:
-            if callable(getattr(webview, "destroy", None)):
-                webview.destroy()
-        except Exception:
-            pass
-        return run_browser(port=info["port"], info=info)
-    stop_server(info)
-    return 0
+            webview.create_window(
+                "毕设工坊 ThesisForge",
+                url,
+                width=1280,
+                height=820,
+                min_size=(960, 640),
+                js_api=DesktopBridge(url),
+            )
+            webview.start(private_mode=False)
+        except Exception as e:  # WebView2 缺失等场景
+            log_message(f"desktop window failed ({e}), fallback to browser")
+            print(f"桌面窗口启动失败（{e}），改用浏览器打开。", flush=True)
+            try:
+                if callable(getattr(webview, "destroy", None)):
+                    webview.destroy()
+            except Exception:
+                pass
+            return run_browser(port=info["port"], info=info)
+        stop_server(info)
+        return 0
+    except Exception as e:  # pragma: no cover - 保护终端用户不看到静默死机
+        log_message(f"desktop startup fatal: {type(e).__name__}: {e}")
+        notify_fatal("毕设工坊启动失败", f"本地服务启动失败：{e}\n详情见程序目录 data/logs/launch.log")
+        return 1
 
 
 def run_browser(host: str = "127.0.0.1", port: int | None = None, info: dict | None = None) -> int:
-    info = info or start_server_thread(host, port)
-    url = info["url"]
-    _banner(url, "browser")
-    if os.environ.get("THESISFORGE_NO_BROWSER") != "1":
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
-        info["thread"].join()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop_server(info)
-    return 0
+        info = info or start_server_thread(host, port)
+        url = info["url"]
+        _banner(url, "browser")
+        if os.environ.get("THESISFORGE_NO_BROWSER") != "1":
+            threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        try:
+            info["thread"].join()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            stop_server(info)
+        return 0
+    except Exception as e:  # pragma: no cover
+        log_message(f"browser startup fatal: {type(e).__name__}: {e}")
+        notify_fatal("毕设工坊启动失败", f"本地服务启动失败：{e}\n详情见程序目录 data/logs/launch.log")
+        return 1
 
 
 def run_headless(host: str = "127.0.0.1", port: int | None = None) -> int:
-    info = start_server_thread(host, port)
-    _banner(info["url"], "headless")
     try:
-        info["thread"].join()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop_server(info)
-    return 0
+        info = start_server_thread(host, port)
+        _banner(info["url"], "headless")
+        try:
+            info["thread"].join()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            stop_server(info)
+        return 0
+    except Exception as e:  # pragma: no cover
+        log_message(f"headless startup fatal: {type(e).__name__}: {e}")
+        return 1
 
 
 def resolve_startup_mode(argv: list[str] | None = None) -> str:

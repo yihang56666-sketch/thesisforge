@@ -53,7 +53,7 @@ def step(msg: str) -> None:
 def _common(name: str, outdir: Path, collect_app: bool = False) -> list[str]:
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--noconfirm", "--clean", "--onefile", "--console",
+        "--noconfirm", "--clean", "--onefile", "--noconsole",
         "--name", name,
         "--distpath", str(DIST / outdir),
         "--workpath", str(BUILD / name),

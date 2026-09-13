@@ -90,9 +90,10 @@ def main():
         if not asset.exists():
             print(f"缺少资产 {asset.name}，请先构建。")
             sys.exit(1)
-        if any(a["name"] == asset.name for a in existing):
-            print("资产已存在，跳过上传:", asset.name)
-            continue
+        old = [a for a in existing if a["name"] == asset.name]
+        for a in old:
+            print("删除旧资产以便覆盖:", asset.name)
+            api.delete(f"/repos/{full}/releases/assets/{a['id']}")
         size = asset.stat().st_size
         print(f"上传 {asset.name}（{size/1048576:.0f} MB）...")
         content_type = "application/octet-stream"
