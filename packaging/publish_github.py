@@ -11,8 +11,9 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 OWNER = "yihang56666-sketch"
 REPO = "thesisforge"
-ZIP = ROOT / "dist" / "ThesisForge-v0.2.0-win64-offline.zip"
-NOTES = ROOT / "packaging" / "release-notes-v0.2.0.md"
+EXE = ROOT / "dist" / "ThesisForge-v0.2.1-win-x64.exe"
+ZIP = ROOT / "dist" / "ThesisForge-v0.2.1-win64-offline.zip"
+NOTES = ROOT / "packaging" / "release-notes-v0.2.1.md"
 
 
 def get_token() -> str:
@@ -67,15 +68,15 @@ def main():
     # 3. 创建 Release（已存在则复用）
     body = NOTES.read_text(encoding="utf-8")
     r = api.post(f"/repos/{full}/releases", json={
-        "tag_name": "v0.2.0",
+        "tag_name": "v0.2.1",
         "target_commitish": "main",
-        "name": "毕设工坊 ThesisForge v0.2.0（含 Windows 离线整合包）",
+        "name": "毕设工坊 ThesisForge v0.2.1（Windows 独立 EXE + 离线整合包）",
         "body": body,
     })
     if r.status_code in (200, 201):
         print("Release 已创建:", r.json().get("html_url"))
     elif r.status_code == 422 and "already_exists" in r.text:
-        r = api.get(f"/repos/{full}/releases/tags/v0.2.0")
+        r = api.get(f"/repos/{full}/releases/tags/v0.2.1")
         print("Release 已存在，复用")
     else:
         print("建 Release 失败:", r.status_code, r.text[:300])
@@ -83,18 +84,25 @@ def main():
     release = r.json()
     upload_url = release["upload_url"].split("{")[0]
 
-    # 4. 上传安装包（148MB）
+    # 4. 上传发布资产（独立 EXE + 离线整合包）
     existing = api.get(f"/repos/{full}/releases/{release['id']}/assets").json()
-    if any(a["name"] == ZIP.name for a in existing):
-        print("资产已存在，跳过上传")
-    else:
-        size = ZIP.stat().st_size
-        print(f"上传安装包 {ZIP.name}（{size/1048576:.0f} MB）...")
-        with open(ZIP, "rb") as f:
+    for asset in (EXE, ZIP):
+        if not asset.exists():
+            print(f"缺少资产 {asset.name}，请先构建。")
+            sys.exit(1)
+        if any(a["name"] == asset.name for a in existing):
+            print("资产已存在，跳过上传:", asset.name)
+            continue
+        size = asset.stat().st_size
+        print(f"上传 {asset.name}（{size/1048576:.0f} MB）...")
+        content_type = "application/octet-stream"
+        if asset.suffix == ".zip":
+            content_type = "application/zip"
+        with open(asset, "rb") as f:
             ru = httpx.post(
                 upload_url,
-                params={"name": ZIP.name},
-                headers={"Authorization": f"token {token}", "Content-Type": "application/zip"},
+                params={"name": asset.name},
+                headers={"Authorization": f"token {token}", "Content-Type": content_type},
                 content=f, timeout=1800,
             )
         if ru.status_code in (200, 201):

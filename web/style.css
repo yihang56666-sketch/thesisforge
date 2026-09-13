@@ -115,6 +115,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
 @media (max-width: 860px) { .form-grid { grid-template-columns: 1fr; } }
 .hint { font-size: 11.5px; color: var(--muted); }
+.split-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 0; min-width: 0; font-size: 11px; font-weight: 500; }
+.split-field[hidden] { display: none; }
 
 /* ---------- 总览清单 ---------- */
 .check-list { }

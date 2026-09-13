@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import datetime
-import io
 import json
+import os
 import re
 import shutil
 import zipfile
@@ -13,15 +13,20 @@ import numpy as np
 import pandas as pd
 
 from .config import DATASETS_DIR, UPLOADS_DIR
+from .config import APP_VERSION
 from . import plots
 from .security import SafeURLError, validate_public_http_url
 
 MAX_DOWNLOAD_BYTES = 1 * 1024**3  # 1GB
 
+# 数据集 ID 白名单：字母/数字/中文/下划线/连字符（_slug 只会产出这一类）
+_DS_ID_RE = re.compile(r"^[0-9a-zA-Z\u4e00-\u9fff_-]{1,80}$")
+
 
 def _slug(name: str) -> str:
     s = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "-", name.strip()).strip("-").lower()
-    return s or "dataset"
+    # 截断到 60 字符：ID 需匹配 _DS_ID_RE，也避免中文长文件名撞 Windows 路径长度上限
+    return (s[:60].rstrip("-")) or "dataset"
 
 
 def _now() -> str:
@@ -96,7 +101,16 @@ def _from_sklearn(fn_name: str) -> tuple[pd.DataFrame, str]:
 
 # ---------------------------------------------------------------- 元数据
 def dataset_dir(ds_id: str) -> Path:
-    return DATASETS_DIR / ds_id
+    """数据集目录。ID 只允许 _slug 的产物字符集，模块内部自带穿越防护，
+    不依赖调用方（main.ds_dir_of）先校验。"""
+    ds_id = str(ds_id or "")
+    if not _DS_ID_RE.match(ds_id):
+        raise ValueError("非法数据集 ID")
+    p = (DATASETS_DIR / ds_id).resolve()
+    root = DATASETS_DIR.resolve()
+    if p == root or not p.is_relative_to(root):
+        raise ValueError("非法数据集路径")
+    return p
 
 
 def load_meta(ds_id: str) -> dict:
@@ -236,8 +250,23 @@ def _safe_extract_zip(zf_source, dest: Path) -> None:
                 shutil.copyfileobj(src, out)
 
 
-def import_file(filename: str, content: bytes) -> dict:
-    """导入 CSV/Excel（表格）或 zip（图像分类数据集，内部为 类别名/图片）。"""
+def import_bytes(filename: str, content: bytes) -> dict:
+    """兼容入口：内存字节流导入。新代码优先用 import_path，避免整包驻留内存。"""
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(filename).suffix.lower() or ".bin"
+    tmp = UPLOADS_DIR / f"mem-{datetime.datetime.now():%Y%m%d%H%M%S%f}-{os.getpid()}{suffix}"
+    tmp.write_bytes(content)
+    try:
+        return import_path(filename, tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def import_path(filename: str, stored: Path) -> dict:
+    """从已落盘的临时文件导入 CSV/Excel（表格）或 zip（图像分类数据集，内部为 类别名/图片）。
+
+    stored 必须是完整写好的文件，解析成功后由本函数负责删除。
+    """
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix.lower()
     base = _slug(Path(filename).stem) or "imported"
@@ -248,38 +277,36 @@ def import_file(filename: str, content: bytes) -> dict:
     ds_dir = dataset_dir(ds_id)
     ds_dir.mkdir(parents=True)
 
+    def _fail(msg: str):
+        shutil.rmtree(ds_dir, ignore_errors=True)
+        raise ValueError(msg)
+
     if suffix in (".csv", ".xlsx", ".xls"):
-        tmp = UPLOADS_DIR / f"tmp-{ds_id}{suffix}"
-        tmp.write_bytes(content)
         try:
-            df = pd.read_csv(tmp) if suffix == ".csv" else pd.read_excel(tmp)
+            df = pd.read_csv(stored) if suffix == ".csv" else pd.read_excel(stored)
         except Exception as e:
-            shutil.rmtree(ds_dir, ignore_errors=True)
-            raise ValueError(f"表格解析失败: {e}")
-        finally:
-            tmp.unlink(missing_ok=True)
+            _fail(f"表格解析失败: {e}")
         if df.empty or df.shape[1] < 2:
-            shutil.rmtree(ds_dir, ignore_errors=True)
-            raise ValueError("表格至少需要 2 列（特征列 + 标签列）")
+            _fail("表格至少需要 2 列（特征列 + 标签列）")
         df.to_csv(ds_dir / "dataset.csv", index=False)
+        n_rows, n_cols = int(len(df)), int(df.shape[1])
         meta = {
             "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "tabular",
             "task": "tabular_classification", "target": df.columns[-1],
-            "columns": list(df.columns), "n_rows": int(len(df)), "created_at": _now(),
-            "desc": f"本地导入表格，{len(df)} 行 × {df.shape[1]} 列。",
+            "columns": list(df.columns), "n_rows": n_rows, "created_at": _now(),
+            "desc": f"本地导入表格，{n_rows} 行 × {n_cols} 列。",
         }
+        df = None  # 提前释放，EDA 阶段不必再持有整表
         _save_meta(ds_dir, meta)
     elif suffix == ".zip":
         img_root = ds_dir / "images"
         try:
-            _safe_extract_zip(io.BytesIO(content), img_root)
+            _safe_extract_zip(stored, img_root)
         except Exception as e:
-            shutil.rmtree(ds_dir, ignore_errors=True)
-            raise ValueError(f"zip 解压失败: {e}")
+            _fail(f"zip 解压失败: {e}")
         classes = [d.name for d in sorted(img_root.iterdir()) if d.is_dir()] if img_root.exists() else []
         if len(classes) < 2:
-            shutil.rmtree(ds_dir, ignore_errors=True)
-            raise ValueError("zip 内需要按『类别文件夹/图片』组织，且至少 2 个类别")
+            _fail("zip 内需要按『类别文件夹/图片』组织，且至少 2 个类别")
         meta = {
             "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "image",
             "task": "image_classification", "target": None, "columns": [],
@@ -287,21 +314,23 @@ def import_file(filename: str, content: bytes) -> dict:
         }
         _save_meta(ds_dir, meta)
     else:
-        shutil.rmtree(ds_dir, ignore_errors=True)
-        raise ValueError("仅支持 .csv/.xlsx/.xls 表格或 .zip 图像数据集")
+        _fail("仅支持 .csv/.xlsx/.xls 表格或 .zip 图像数据集")
+    stored.unlink(missing_ok=True)
     run_eda(ds_id)
     return load_meta(ds_id)
 
 
 def download_url(url: str, name: str | None = None) -> dict:
     """从公网 URL 下载数据集（http/https，逐跳 SSRF 校验，限 1GB）。"""
-    import httpx
-
     url = validate_public_http_url(url)
     filename = Path(urlparse_path(url)).name or "download.zip"
     if not Path(filename).suffix.lower():
         filename += ".zip"
-    return import_file(name or filename, _fetch(url))
+    dest = _fetch_to_tempfile(url, name or filename)
+    try:
+        return import_path(name or filename, dest)
+    finally:
+        dest.unlink(missing_ok=True)
 
 
 def urlparse_path(url: str) -> str:
@@ -310,10 +339,63 @@ def urlparse_path(url: str) -> str:
     return urlparse(url).path
 
 
-def _fetch(url: str) -> bytes:
-    import httpx
+def _fetch_to_tempfile(url: str, filename: str) -> Path:
+    """流式下载到临时文件：边下边累计字节数，超限立即中断，不把整个响应读进内存。"""
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(filename).suffix.lower() or ".bin"
+    tmp = UPLOADS_DIR / f"dl-{datetime.datetime.now():%Y%m%d%H%M%S%f}-{os.getpid()}{suffix}"
+    try:
+        _stream_download(url, tmp)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return tmp
 
-    with httpx.Client(follow_redirects=False, timeout=120, headers={"User-Agent": "ThesisForge/0.1"}) as client:
+
+def _stream_download(url: str, tmp: Path) -> None:
+    import httpx
+    from urllib.parse import urljoin
+
+    with httpx.Client(follow_redirects=False, timeout=httpx.Timeout(30, read=180),
+                      headers={"User-Agent": f"ThesisForge/{APP_VERSION}"}) as client:
+        hops = 0
+        current = url
+        while True:
+            validate_public_http_url(current)
+            with client.stream("GET", current) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    hops += 1
+                    if hops > 5:
+                        raise SafeURLError("重定向次数过多")
+                    loc = resp.headers.get("location", "")
+                    if not loc:
+                        raise SafeURLError("重定向缺少目标地址")
+                    current = urljoin(current, loc)
+                    continue
+                resp.raise_for_status()
+                declared = resp.headers.get("content-length", "")
+                if declared.strip().isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
+                    raise ValueError("文件超过 1GB 下载上限")
+                total = 0
+                with tmp.open("wb") as out:
+                    for chunk in resp.iter_bytes():
+                        total += len(chunk)
+                        if total > MAX_DOWNLOAD_BYTES:
+                            raise ValueError("文件超过 1GB 下载上限")
+                        out.write(chunk)
+                    out.flush()
+                if total == 0:
+                    raise ValueError("下载内容为空")
+                return
+
+
+def _fetch(url: str) -> bytes:
+    """整包读入内存的下载（仅供测试与小文件使用）。"""
+    import httpx
+    from urllib.parse import urljoin
+
+    with httpx.Client(follow_redirects=False, timeout=120,
+                      headers={"User-Agent": f"ThesisForge/{APP_VERSION}"}) as client:
         hops = 0
         current = url
         while True:
@@ -326,8 +408,6 @@ def _fetch(url: str) -> bytes:
                 loc = resp.headers.get("location", "")
                 if not loc:
                     raise SafeURLError("重定向缺少目标地址")
-                from urllib.parse import urljoin
-
                 current = urljoin(current, loc)
                 continue
             resp.raise_for_status()

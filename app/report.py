@@ -374,7 +374,10 @@ def build_report(
                     _figure(doc, eda / fname, f"图 3-{fi}  {cap}")
         _heading(doc, "3.3  预处理与数据划分", 2)
         _para(doc, "数值特征经中位数填充与标准化处理，类别特征经众数填充与独热编码；"
-                   "数据按分层抽样划分为训练集与测试集，标准化器仅在训练集上拟合，避免数据泄漏。"
+                   "数据先按分层抽样划分为训练集与测试集，再在训练集内部拟合填充值与标准化参数"
+                   "（填充器、标准化器均作为 Pipeline 的一部分只在训练折/训练集上 fit），避免数据泄漏。"
+                   "图像任务进一步划分为训练集、验证集与测试集：权重在训练集上更新，"
+                   "模型与超参数依据验证集选择，测试集仅在最终评估时使用一次。"
                    "所有实验固定随机种子以保证可复现。")
         if drafts.get("preprocess"):
             _md_to_paras(doc, drafts["preprocess"])
@@ -409,8 +412,13 @@ def build_report(
                          json_params_short(cfg.get("params")),
                          f"{pm.get('name', '-')} = {fmt_val(pm.get('value', '-'))}",
                          f"{s.get('n_train', '-')}/{s.get('n_test', s.get('n_val', '-'))}"])
-        _three_line_table(doc, ["数据集", "模型", "主要超参数", "主指标（测试集）", "训练/测试样本"],
+        _three_line_table(doc, ["数据集", "模型", "主要超参数", "主指标", "训练/测试样本"],
                           rows, caption="表 4-2  实验结果对比")
+        _para(doc, "注：主指标均为未参与训练的评估样本结果。图像任务区分训练/验证/测试集，"
+                   "test_* 为独立测试集结果（仅在最终评估时使用一次），val_* 为验证集结果"
+                   "（模型与超参数选择依据）；表格任务报告单次测试集拆分的指标，并另附交叉验证"
+                   "供稳定性参考。论文分析应避免反复查看同一测试集造成选择偏置，"
+                   "必要时补充多次重复实验的均值与标准差。")
 
     fig_no = 0
     for ri, r in enumerate(runs):
@@ -433,7 +441,8 @@ def build_report(
             _md_to_paras(doc, drafts[f"analysis:{r['run_id']}"])
         elif s.get("metrics"):
             ms = "；".join(f"{k} = {v:.4f}" if isinstance(v, float) else f"{k} = {v}" for k, v in s["metrics"].items())
-            _para(doc, f"该模型测试集表现为：{ms}。（配置 AI 接口后，此处将自动生成实验解读，"
+            src = {"test": "测试集", "val": "验证集"}.get(s.get("eval_source"), "评估集")
+            _para(doc, f"该模型在{src}上的表现为：{ms}。（配置 AI 接口后，此处将自动生成实验解读，"
                        f"建议结合自己的理解重写。）")
 
     # ---------------- 第五章 总结

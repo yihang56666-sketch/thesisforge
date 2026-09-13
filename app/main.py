@@ -8,13 +8,15 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import os
 import re
 import shutil
 import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,6 +26,7 @@ from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
     ensure_dirs, load_runtime_config, resolve_api_key, save_runtime_config,
 )
+from .config import UPLOADS_DIR
 from .security import SafeURLError
 
 ensure_dirs()
@@ -31,6 +34,42 @@ ensure_dirs()
 app = FastAPI(title="ThesisForge 毕设工坊", version=APP_VERSION)
 
 _DS_ID_RE = re.compile(r"^[0-9a-zA-Z\u4e00-\u9fff\-]{1,80}$")
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", ""}
+
+
+def safe_report_filename(title: str) -> str:
+    """去掉不能用于 Windows 文件名的字符并截断，空标题回退为「报告」。"""
+    return (re.sub(r"[^\w\u4e00-\u9fff-]+", "", (title or "").strip())[:40] or "报告")
+
+
+def _host_of(value: str) -> str:
+    """从 Host / Origin 中取出纯主机名（去端口，保留 IPv6 方括号）。"""
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    if v.startswith("["):                      # IPv6 字面量，如 [::1]:8765
+        end = v.find("]")
+        return v[: end + 1] if end != -1 else v
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+@app.middleware("http")
+async def local_origin_guard(request: Request, call_next):
+    """本机服务防护：Host 必须是回环地址（挡 DNS rebinding），
+    写操作的 Origin 必须与本机同源（挡浏览器发起的跨站 POST/DELETE）。"""
+    host = _host_of(request.headers.get("host") or "")
+    if host not in _LOCAL_HOSTS:
+        return JSONResponse(status_code=403, content={"detail": "拒绝访问：仅允许本机访问该服务"})
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = request.headers.get("origin") or ""
+        if origin:
+            from urllib.parse import urlparse
+
+            oh = _host_of(urlparse(origin).netloc)
+            if oh not in _LOCAL_HOSTS:
+                return JSONResponse(status_code=403, content={"detail": "拒绝访问：来源不是本机"})
+    return await call_next(request)
 
 
 def ds_dir_of(ds_id: str) -> Path:
@@ -135,14 +174,30 @@ def load_builtin(req: BuiltinReq):
 
 @app.post("/api/datasets/import")
 async def import_dataset(file: UploadFile = File(...)):
-    content = await file.read()
-    if len(content) > datasets_hub.MAX_DOWNLOAD_BYTES:
-        raise HTTPException(400, "文件超过 1GB 限制")
+    # 分块落盘并计数，避免超大文件被整体读进内存
+    suffix = Path(file.filename or "").suffix.lower()
+    tmp = UPLOADS_DIR / f"upload-{int(time.time() * 1000)}-{os.getpid()}{suffix}"
+    total = 0
     try:
-        meta = datasets_hub.import_file(file.filename, content)
+        with tmp.open("wb") as out:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > datasets_hub.MAX_DOWNLOAD_BYTES:
+                    raise HTTPException(400, "文件超过 1GB 限制")
+                out.write(chunk)
+        if total == 0:
+            raise HTTPException(400, "上传文件为空")
+        meta = datasets_hub.import_path(file.filename or "uploaded.csv", tmp)
         return {"ok": True, "dataset": meta}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, str(e))
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class DownloadReq(BaseModel):
@@ -257,6 +312,15 @@ def create_run(req: CreateRunReq):
             raise HTTPException(400, "请在高级选项中选择文本列与标签列")
 
     script = "train_torch.py" if task == "image_classification" else "train_sklearn.py"
+    if script == "train_torch.py":
+        # 图像训练依赖 PyTorch；离线整合包与精简 EXE 可能未安装，提前给出可操作的提示
+        try:
+            has_torch = importlib.util.find_spec("torch") is not None
+        except (ImportError, ValueError):
+            has_torch = False
+        if not has_torch:
+            raise HTTPException(400, "未检测到 PyTorch，无法进行图像分类训练。请运行「安装图像训练-CPU版.bat」"
+                                    "（或 GPU 版），或改用表格/文本任务。")
     # 标签列兜底：未指定时使用最后一列
     target = req.target if task != "image_classification" else None
     if task != "image_classification" and not target:
@@ -269,23 +333,9 @@ def create_run(req: CreateRunReq):
         if ds_meta.get("columns") and target not in ds_meta["columns"]:
             raise HTTPException(400, f"标签列 {target} 不在数据集中")
     # 参数裁剪：只保留目录中定义的键，并做类型/范围约束
-    clean_params = {}
-    for k, pschema in spec["params"].items():
-        v = (req.params or {}).get(k, pschema.get("default"))
-        if v is None:
-            continue
-        try:
-            if pschema["type"] == "int":
-                v = int(float(v))
-            elif pschema["type"] == "float":
-                v = float(v)
-            elif pschema["type"] == "bool":
-                v = bool(v) if not isinstance(v, str) else v.lower() in ("1", "true", "yes", "on")
-            elif pschema["type"] == "choice" and v not in pschema["options"]:
-                v = pschema["default"]
-        except Exception:
-            v = pschema.get("default")
-        clean_params[k] = v
+    # 白名单 + 类型 + 有限性 + min/max 夹取，全部收在 catalog.sanitize_params 里，
+    # 这样直接打 API 也拿不到 epochs=99999 这类能把机器跑挂的参数。
+    clean_params = catalog.sanitize_params(spec, req.params)
 
     ds_dir = ds_dir_of(req.dataset_id)
     config = {
@@ -378,6 +428,10 @@ async def analyze_run(run_id: str):
         "model_label": detail["config"].get("model_label"),
         "params": detail["config"].get("params"),
         "test_size": detail["config"].get("test_size"),
+        "n_train": (detail["summary"] or {}).get("n_train"),
+        "n_val": (detail["summary"] or {}).get("n_val"),
+        "n_test": (detail["summary"] or {}).get("n_test"),
+        "split_scheme": (detail["summary"] or {}).get("split_scheme"),
         "metrics": (detail["summary"] or {}).get("metrics"),
         "cv_scores": (detail["summary"] or {}).get("cv_scores"),
         "epochs": (detail["summary"] or {}).get("epochs"),
@@ -467,7 +521,10 @@ async def generate_report(req: ReportReq):
             "title": req.title,
             "dataset": {k: dataset_meta.get(k) for k in ("name", "task", "n_rows", "desc")} if dataset_meta else None,
             "runs": [{"model": (r["summary"] or {}).get("model_label"), "metrics": (r["summary"] or {}).get("metrics"),
-                      "params": r["config"].get("params")} for r in runs],
+                      "params": r["config"].get("params"),
+                      "primary_metric": (r["summary"] or {}).get("primary_metric"),
+                      "split_scheme": (r["summary"] or {}).get("split_scheme")} for r in runs],
+            "写作要求": "实验结果段落中必须区分验证集与测试集：test_* 指标称『测试集』，val_* 指标称『验证集』，不得混用。",
         }
         sections = [
             ("abstract", "摘要"), ("background", "第一章 研究背景与意义"),
@@ -492,8 +549,7 @@ async def generate_report(req: ReportReq):
                 drafts[k] = text
 
     ts = time.strftime("%Y%m%d-%H%M%S")
-    safe_title = re.sub(r"[^\w\u4e00-\u9fff-]+", "", (req.title or "报告").strip())[:40] or "报告"
-    out = EXPORTS_DIR / f"{safe_title}-{ts}.docx"
+    out = EXPORTS_DIR / f"{safe_report_filename(req.title)}-{ts}.docx"
     try:
         path = report.build_report(out, req.title, req.author or {}, dataset_meta, dataset_dir, runs, drafts)
     except Exception as e:
@@ -522,3 +578,49 @@ def download_report(filename: str):
 # ================================================================ 静态页面
 if WEB_DIR.exists():
     app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+
+
+# ================================================================ 直接运行入口
+def find_free_port(preferred: int = 8765) -> int:
+    import socket
+
+    for port in [preferred] + [preferred + i for i in range(1, 21)]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise OSError("8765-8785 端口都被占用，请释放一个后重试")
+
+
+def run_server(host: str = "127.0.0.1", port: int | None = None, open_browser: bool = True) -> None:
+    """启动本地服务。打包成 EXE 后这就是双击后的行为。"""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    port = int(port or os.environ.get("TF_PORT") or 8765)
+    port = find_free_port(port)
+    url = f"http://{host}:{port}/"
+    print(f"毕设工坊 ThesisForge v{APP_VERSION}  ->  {url}", flush=True)
+    print(f"数据目录: {DATA_DIR}", flush=True)
+    if not WEB_DIR.exists():
+        print("警告：找不到 web/ 静态资源目录，界面将无法显示。", flush=True)
+    # 只做 finder 查询，不真的 import torch（那是好几秒的 DLL 加载）
+    if importlib.util.find_spec("torch") is not None:
+        print("图像分类：已检测到 PyTorch，可用。", flush=True)
+    else:
+        print("图像分类：未安装 PyTorch，仅支持表格/文本任务（图像训练请用离线整合包）。", flush=True)
+    if open_browser and os.environ.get("THESISFORGE_NO_BROWSER") != "1":
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    except KeyboardInterrupt:
+        print("\n已退出。", flush=True)
+
+
+if __name__ == "__main__":
+    run_server()

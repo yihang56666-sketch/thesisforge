@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import random
+import hashlib
 
 # ---------------------------------------------------------------- 词表
 # 高频 AI 套话：直接删除或替换
@@ -58,7 +59,16 @@ INTENSIFIERS = ["非常", "极其", "十分", "相当", "极为", "极大地", "
 # AI 常见句式开头（用于开头重复检测）
 _CONNS = ["同时，", "此外，", "另外，", "在实验中，", "从结果看，"]
 
-_RND = random.Random(20260913)
+_RND = random.Random(20260913)   # 仅作历史兼容保留；实际改写使用按输入定种的实例
+
+
+def _rng_for(text: str) -> random.Random:
+    """按原文定种：同一篇原文永远得到同一版改写。
+
+    论文工具必须可复现 —— 重新生成报告时措辞不应漂移。
+    """
+    digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    return random.Random(int(digest[:16], 16))
 
 
 def _sentences(text: str) -> list[str]:
@@ -66,19 +76,19 @@ def _sentences(text: str) -> list[str]:
     return [p for p in parts if p and p.strip()]
 
 
-def _rand_choice(options: list[str]) -> str:
-    return _RND.choice(options) if options else ""
+def _rand_choice(options: list[str], rnd: random.Random | None = None) -> str:
+    return (rnd or _RND).choice(options) if options else ""
 
 
 # ---------------------------------------------------------------- 规则改写
-def _strip_cliches(text: str, changes: list[str]) -> str:
+def _strip_cliches(text: str, changes: list[str], rnd: random.Random | None = None) -> str:
     for c in CLICHE_REMOVE:
         if c in text:
             text = text.replace(c, "")
             changes.append(f"删除套话「{c.rstrip('，：')}」")
     for word, alts in CLICHE_REPLACE.items():
         if word in text:
-            rep = _rand_choice(alts)
+            rep = _rand_choice(alts, rnd)
             text = text.replace(word, rep)
             changes.append(f"「{word}」→「{rep}」" if rep else f"删除「{word}」")
     return text
@@ -158,7 +168,7 @@ def _debullet(text: str, changes: list[str]) -> str:
     return "\n".join(out)
 
 
-def _vary_openers(text: str, changes: list[str]) -> str:
+def _vary_openers(text: str, changes: list[str], rnd: random.Random | None = None) -> str:
     """连续句子开头相同时插入衔接词，避免机械排比感。"""
     sents = _sentences(text)
     result = []
@@ -169,7 +179,7 @@ def _vary_openers(text: str, changes: list[str]) -> str:
         if opener == prev_opener and len(s) > 12:
             same_streak += 1
             if same_streak >= 2:
-                s = _rand_choice(_CONNS) + s
+                s = _rand_choice(_CONNS, rnd) + s
                 same_streak = 0
                 changes.append("调整了连续同头句的节奏")
         else:
@@ -184,12 +194,13 @@ def humanize_text(text: str) -> dict:
     changes: list[str] = []
     out = text or ""
     before = score_ai_flavor(out)
+    rnd = _rng_for(out)
     out = _debullet(out, changes)
-    out = _strip_cliches(out, changes)
+    out = _strip_cliches(out, changes, rnd)
     out = _tone_down_intensifiers(out, changes)
     out = _trim_nominal_verbs(out, changes)
     out = _split_long(out, changes)
-    out = _vary_openers(out, changes)
+    out = _vary_openers(out, changes, rnd)
     out = re.sub(r"\n{3,}", "\n\n", out)
     after = score_ai_flavor(out)
     return {"text": out, "changes": changes, "score_before": before, "score_after": after}

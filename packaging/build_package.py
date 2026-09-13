@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """构建 Windows 离线整合包：内嵌 Python 3.13 + 预装依赖 + 源码，解压即用。
 
-产物: dist/ThesisForge-v0.2.0-win64-offline.zip
+产物: dist/ThesisForge-v0.2.1-win64-offline.zip
 安全约定：
 - 下载地址为硬编码的 python.org 官方 https 直链，经 validate_public_http_url
   域名白名单校验后，由 app.datasets_hub._fetch 执行（内含 SSRF 逐跳校验：
@@ -24,7 +24,7 @@ from app.datasets_hub import _fetch  # noqa: E402
 from app.security import validate_public_http_url  # noqa: E402
 
 DIST = ROOT / "dist"
-PKG = DIST / "ThesisForge-v0.2.0-win64"
+PKG = DIST / "ThesisForge-v0.2.1-win64"
 RT = PKG / "runtime"
 PY_EMBED_URL = "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-amd64.zip"
 ALLOWED_HOST = "www.python.org"
@@ -74,7 +74,7 @@ def main():
     safe_extract_zip(io.BytesIO(content), RT)
     step("配置 python313._pth ...")
     pth = RT / "python313._pth"
-    pth.write_text("python313.zip\n.\nsite-packages\nimport site\n", encoding="ascii")
+    pth.write_text("python313.zip\n.\n..\nsite-packages\nimport site\n", encoding="ascii")
 
     # 2. 预装依赖（用系统 pip 安装到包内 site-packages）
     step("安装核心依赖（较大，请耐心）...")
@@ -91,7 +91,12 @@ def main():
     for f in ["README.md", "LICENSE", "requirements.txt"]:
         shutil.copy2(ROOT / f, PKG / f)
 
-    # 4. 启动与安装脚本
+    # 4. 启动器与安装脚本
+    step("复制启动器 EXE ...")
+    launcher = DIST / "launcher" / "ThesisForge-launcher.exe"
+    if not launcher.exists():
+        raise SystemExit("缺少启动器 EXE，请先运行: python packaging/build_exe.py --launcher-only")
+    shutil.copy2(launcher, PKG / "ThesisForge.exe")
     step("生成启动脚本 ...")
     (PKG / "启动毕设工坊.bat").write_bytes(
         ("@echo off\r\nchcp 65001 >nul\r\ncd /d %~dp0\r\n"
@@ -100,7 +105,7 @@ def main():
          "echo   关闭本窗口即停止服务\r\n"
          "echo ========================================\r\n"
          "start \"\" http://127.0.0.1:8765\r\n"
-         "runtime\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765\r\n"
+         "ThesisForge.exe --no-browser\r\n"
          "pause\r\n").encode("utf-8"))
     (PKG / "安装图像训练-CPU版.bat").write_bytes(
         ("@echo off\r\nchcp 65001 >nul\r\ncd /d %~dp0\r\n"
@@ -113,13 +118,14 @@ def main():
          "runtime\\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126\r\n"
          "pause\r\n").encode("utf-8"))
     (PKG / "使用说明.txt").write_text(
-        """毕设工坊 ThesisForge v0.2.0 — Windows 离线整合包
+        """毕设工坊 ThesisForge v0.2.1 — Windows 离线整合包
 ================================================
 
 【快速开始】
-1. 双击「启动毕设工坊.bat」，浏览器会自动打开 http://127.0.0.1:8765
+1. 双击「ThesisForge.exe」（会自动打开浏览器并启动服务）；
+   或双击「启动毕设工坊.bat」（先开浏览器再启动，关闭窗口即停止）
 2. 首次使用会弹出新手引导，照着总览页的清单做即可
-3. 关闭命令行窗口即停止服务
+3. 想让服务在后台运行时不弹浏览器，可加参数：ThesisForge.exe --no-browser
 
 【图像分类训练】
 本包为控制体积未预装 PyTorch。需要图像训练时：
@@ -137,12 +143,12 @@ def main():
 
 【注意】
 - 请勿使用 360 等软件"清理"本目录的 runtime 文件夹
-- 端口 8765 被占用时，编辑启动 bat 更换端口
+- 端口 8765 被占用时，程序会自动改用 8766-8785 的可用端口，浏览器地址以窗口显示为准
 """, encoding="utf-8")
 
     # 5. 压缩
     step("压缩为 zip ...")
-    zpath = DIST / "ThesisForge-v0.2.0-win64-offline.zip"
+    zpath = DIST / "ThesisForge-v0.2.1-win64-offline.zip"
     if zpath.exists():
         zpath.unlink()
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:

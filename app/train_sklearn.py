@@ -146,9 +146,9 @@ def main() -> int:
             if task == "text_classification":
                 vec = TfidfVectorizer(max_features=int(p.get("max_features", 20000)), ngram_range=(1, int(p.get("ngram_max", 2))))
                 if mkey == "tfidf_logreg":
-                    return Pipeline([("tfidf", vec), ("clf", LogisticRegression(C=float(p.get("C", 1.0)), max_iter=1000))])
+                    return Pipeline([("tfidf", vec), ("clf", LogisticRegression(C=float(p.get("C", 1.0)), max_iter=1000, random_state=seed))])
                 if mkey == "tfidf_svm":
-                    return Pipeline([("tfidf", vec), ("clf", SVC(C=float(p.get("C", 1.0)), kernel="linear", probability=True))])
+                    return Pipeline([("tfidf", vec), ("clf", SVC(C=float(p.get("C", 1.0)), kernel="linear", probability=True, random_state=seed))])
             raise ValueError(f"未知模型: {mkey} (任务 {task})")
 
         if task == "text_classification":

@@ -21,6 +21,14 @@ def _endpoint(base_url: str) -> str:
     base = (base_url or "").strip().rstrip("/")
     if not base:
         raise AIError("未配置 AI 接口地址（base_url）")
+    # 只接受 http/https 绝对地址：拒绝 file://、gopher:// 等，避免把 Key 发往非预期协议
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(base)
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        raise AIError("AI 接口地址必须是以 http(s):// 开头的绝对地址")
+    if parts.username or parts.password:
+        raise AIError("AI 接口地址不要内嵌账号密码，请使用 API Key 字段")
     if base.endswith("/chat/completions"):
         return base
     if base.endswith("/v1"):
@@ -46,7 +54,7 @@ async def chat(messages: list[dict], max_tokens: int | None = None, temperature:
     }
     url = _endpoint(cfg.get("llm_base_url", ""))
     try:
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=90, follow_redirects=False) as client:
             resp = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -54,6 +62,9 @@ async def chat(messages: list[dict], max_tokens: int | None = None, temperature:
             )
     except httpx.HTTPError as e:
         raise AIError(f"连接 AI 接口失败: {e.__class__.__name__}: {e}")
+    if resp.status_code in (301, 302, 303, 307, 308):
+        # 不自动跟随重定向，避免 Authorization 头被转发到第三方域
+        raise AIError("AI 接口返回重定向，为保护 API Key 未跟随；请直接把 base_url 填成最终地址")
     if resp.status_code == 401:
         raise AIError("AI 接口返回 401：API Key 无效")
     if resp.status_code == 404:
@@ -99,6 +110,8 @@ def _run_prompt(meta: dict) -> list[dict]:
     compact = {
         "数据集": meta.get("dataset_name"), "任务": meta.get("task"), "模型": meta.get("model_label"),
         "超参数": meta.get("params"), "测试集占比": meta.get("test_size"),
+        "数据划分": meta.get("split_scheme"), "训练/验证/测试样本": [meta.get("n_train"), meta.get("n_val"), meta.get("n_test")],
+        "主指标": meta.get("primary_metric"),
         "指标": meta.get("metrics"), "交叉验证": meta.get("cv_scores"),
         "训练轮曲线末尾": (meta.get("epochs") or [])[-5:],
     }
@@ -146,7 +159,8 @@ def fallback_dataset_analysis(meta: dict) -> str:
         lines.append("- 回归任务：先跑线性回归做基线，再对比随机森林/GBDT；评价指标用 R²、RMSE、MAE 组合呈现。")
     else:
         lines.append("- 分类任务：先跑逻辑回归/随机森林建立基线，再逐步尝试 GBDT、SVM、MLP；表格数据上 GBDT 常最优。")
-    lines.append("- 数据划分：先切分再标准化（工具已按此实现），固定 random_state 保证实验可复现；论文中报告测试集与交叉验证两组结果。")
+    lines.append("- 数据划分：先切分再标准化（工具已按此实现），固定 random_state 保证实验可复现；"
+                 "论文中报告测试集与交叉验证两组结果，验证集/交叉验证用于选模型，测试集只用于最终报告。")
     lines.append("- 下一步：进入「模型训练」页选择模型，先跑一版基线，再在「AI 分析」中对照改进。")
     return "\n".join(lines)
 
@@ -182,6 +196,18 @@ def fallback_run_analysis(meta: dict) -> str:
             tail = [e.get("val_acc") or 0 for e in epochs[-4:]]
             if max(tail) - min(tail) < 0.002:
                 lines.append("- 验证准确率已收敛，继续增加轮数收益有限；可改试学习率调度或更大模型。")
+    if meta.get("task") == "image_classification":
+        if (meta.get("n_test") or 0) > 0:
+            va = meta.get("metrics", {}).get("best_val_accuracy")
+            te = meta.get("metrics", {}).get("test_accuracy")
+            if isinstance(va, (int, float)) and isinstance(te, (int, float)):
+                lines.append(f"- 模型选择依据验证集（best_val_accuracy = {_fmt_pct(va)}），"
+                             f"表头指标 test_accuracy = {_fmt_pct(te)} 来自未参与训练与选型的独立测试集，"
+                             "两者差距是正常泛化损失；若差距很大说明选型过度拟合了验证集，应增大验证集或多次重复取均值。")
+        else:
+            lines.append("- ⚠ 本次训练没有独立测试集，主指标是验证集准确率。"
+                         "用它当『测试集结果』写进论文会偏高（因为 best.pt 是按这份数据挑出来的），"
+                         "建议在训练页把测试集占比调到 0.2 以上重跑一次。")
     lines.append("\n## 改进建议（毕业设计通用路线）")
     lines.append("1. **基线对比**：至少再跑 1-2 个对照模型（逻辑回归/随机森林/GBDT 或 CNN vs ResNet），论文中需要对比表格。")
     lines.append("2. **超参数搜索**：围绕学习率、树数量/深度、正则化系数各取 3 个值做网格/随机搜索，记录每组结果。")

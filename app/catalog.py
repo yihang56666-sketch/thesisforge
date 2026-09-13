@@ -1,6 +1,8 @@
 """模型目录：任务类型 → 模型 → 参数 schema（供前端动态表单与报告文案使用）。"""
 from __future__ import annotations
 
+import math
+
 CATALOG: dict = {
     "tabular_classification": {
         "label": "表格数据 · 分类",
@@ -166,3 +168,45 @@ def get_model_spec(task: str, model: str) -> dict | None:
     if not m:
         return None
     return {"task": task, "model": model, "label": m["label"], "desc": m["desc"], "params": m["params"]}
+
+
+def _coerce(pschema: dict, raw):
+    """按 schema 转换单个参数：类型、有限性、min/max 夹取。
+
+    越界一律夹到合法区间而不是抛错 —— 前端滑杆已经限定了范围，这里兜住的是
+    直接打 API 或脚本误传，避免 epochs=99999 之类把机器挂死。
+    """
+    default = pschema.get("default")
+    ptype = pschema.get("type")
+    if ptype == "bool":
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
+    if ptype == "choice":
+        return raw if raw in (pschema.get("options") or []) else default
+    if ptype not in ("int", "float"):
+        return raw
+    try:
+        v = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(v):
+        return default
+    lo, hi = pschema.get("min"), pschema.get("max")
+    if lo is not None:
+        v = max(float(lo), v)
+    if hi is not None:
+        v = min(float(hi), v)
+    return int(v) if ptype == "int" else v
+
+
+def sanitize_params(spec: dict, raw: dict | None) -> dict:
+    """白名单 + 类型 + 范围三重清洗：只保留 schema 里声明过的键。"""
+    out: dict = {}
+    raw = raw or {}
+    for key, pschema in (spec.get("params") or {}).items():
+        value = _coerce(pschema, raw.get(key, pschema.get("default")))
+        if value is None:
+            continue
+        out[key] = value
+    return out

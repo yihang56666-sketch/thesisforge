@@ -10,19 +10,38 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
+def _bundle_root() -> Path:
+    """只读资源根目录（web/ 等）。PyInstaller 打包后是解包临时目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent.parent
+
+
+def _app_home() -> Path:
+    """可写根目录：打包后是 EXE 所在目录，开发时是仓库根目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+FROZEN = bool(getattr(sys, "frozen", False))
+BUNDLE_DIR = _bundle_root()
+ROOT = _app_home()
+WEB_DIR = BUNDLE_DIR / "web"
+
+_data_override = os.environ.get("THESISFORGE_DATA_DIR", "").strip()
+DATA_DIR = Path(_data_override).resolve() if _data_override else ROOT / "data"
 DATASETS_DIR = DATA_DIR / "datasets"
 RUNS_DIR = DATA_DIR / "runs"
 EXPORTS_DIR = DATA_DIR / "exports"
 UPLOADS_DIR = DATA_DIR / "uploads"
 CONFIG_FILE = DATA_DIR / "runtime_config.json"
-WEB_DIR = ROOT / "web"
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 DEFAULT_RUNTIME_CONFIG: dict = {
     # OpenAI 兼容接口地址，如 https://api.deepseek.com/v1

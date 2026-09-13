@@ -86,6 +86,8 @@ def create_run(config: dict, script: str) -> str:
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONUNBUFFERED"] = "1"
 
+    sync_jobs()  # 先回收已退出的作业，避免陈旧 running 状态与句柄堆积
+
     base = run_dir.resolve()
     log_path = base / "log.txt"
     if ".." in log_path.parts or not log_path.resolve().is_relative_to(base):
@@ -95,12 +97,27 @@ def create_run(config: dict, script: str) -> str:
     script_path = (ROOT / "app" / script).resolve()
     if ".." in script_path.parts or not script_path.is_relative_to((ROOT / "app").resolve()):
         raise ValueError("非法脚本路径")
-    proc = subprocess.Popen(
-        [sys.executable, "-u", str(script_path), "--run-dir", str(run_dir)],
-        cwd=str(ROOT), env=env, stdout=log_fp, stderr=subprocess.STDOUT,
-    )
+    try:
+        proc = subprocess.Popen(
+            worker_cmd(Path(script).name, script_path, run_dir),
+            cwd=str(ROOT), env=env, stdout=log_fp, stderr=subprocess.STDOUT,
+        )
+    finally:
+        log_fp.close()  # 子进程已持有自己的句柄，父进程不必再留着
     JOBS[run_id] = proc
     return run_id
+
+
+def worker_cmd(script_name: str, script_path: Path, run_dir: Path) -> list[str]:
+    """训练子进程命令行。
+
+    普通 Python 下直接 `python app/train_x.py`；打包成 EXE（PyInstaller）后
+    sys.executable 就是主程序本身，必须回到自身入口用 --tf-worker 分发，
+    否则会把自己再启一次 Web 服务。
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--tf-worker", script_name, "--run-dir", str(run_dir)]
+    return [sys.executable, "-u", str(script_path), "--run-dir", str(run_dir)]
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -118,10 +135,21 @@ def cancel_run(run_id: str) -> bool:
     run_dir = run_dir_of(run_id)
     if proc is not None and proc.poll() is None:
         _kill_tree(proc)
+        # 先等子进程真正退出，再落最终状态，避免被垂死子进程覆盖
+        try:
+            proc.wait(timeout=15)
+        except Exception:
+            pass
+        current = read_status(run_id).get("state")
+        if current in (STATUS_DONE, STATUS_FAILED):
+            JOBS.pop(run_id, None)
+            return current == STATUS_DONE
         _write_status(run_dir, STATUS_CANCELLED, "用户手动取消")
+        JOBS.pop(run_id, None)
         return True
     if run_dir.exists() and read_status(run_id).get("state") == STATUS_RUNNING:
         _write_status(run_dir, STATUS_CANCELLED, "用户手动取消")
+        JOBS.pop(run_id, None)
         return True
     return False
 

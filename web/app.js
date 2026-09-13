@@ -30,7 +30,9 @@ function mdToHtml(text) {
   const out = [];
   let inList = false;
   for (const raw of lines) {
-    const line = esc(raw.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>"));
+    // 先整体转义再插入标签：顺序反了会把 <b>/<code> 一起转义掉，
+    // 也才不会让模型输出里的原始 HTML 进入 DOM。
+    const line = esc(raw).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
     const isLi = /^[-*] /.test(line) || /^\d+\. /.test(line);
     if (isLi && !inList) { out.push("<ul>"); inList = true; }
     if (!isLi && inList) { out.push("</ul>"); inList = false; }
@@ -88,7 +90,7 @@ const C = { teal: "#0d6e63", orange: "#c2410c", ink: "#1d2023", gray: "#9aa1a6",
 
 const state = {
   health: null, config: null, datasets: [], builtin: [], runs: [], reports: [],
-  train: { datasetId: "", task: "", model: "", params: {}, testSize: 0.2, seed: 42, textColumn: "", target: "" },
+  train: { datasetId: "", task: "", model: "", params: {}, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "" },
   openRun: null, openDataset: null, pollTimer: null,
 };
 
@@ -334,6 +336,7 @@ async function pageTrain() {
   const taskDef = state.models[t.task];
   const modelKeys = taskDef ? Object.keys(taskDef.models) : [];
   if (!modelKeys.includes(t.model)) t.model = modelKeys[0] || "";
+  const isImage = t.task === "image_classification";
 
   $("#page").innerHTML = `
     ${pageHead("02", "模型训练", "选数据集，选模型，表单里调参数，点一次按钮开始训练。训练在后台运行，可回到总览再做别的事。")}
@@ -347,17 +350,20 @@ async function pageTrain() {
         <div class="form-row"><label>数据集</label>
           <select id="tr-ds">${state.datasets.map((d) => `<option value="${esc(d.id)}" ${d.id === t.datasetId ? "selected" : ""}>${esc(d.name)}（${d.type === "image" ? "图像" : "表格"}）</option>`).join("") || "<option>请先到数据集页载入</option>"}</select></div>
         <div class="form-row"><label>任务类型</label>
-          <select id="tr-task">${Object.entries(state.models).filter(([k]) => !ds || ds.type === "image" ? k === "image_classification" : k !== "image_classification")
+          <select id="tr-task">${Object.entries(state.models).filter(([k]) => (ds && ds.type === "image") === (k === "image_classification"))
             .map(([k, v]) => `<option value="${esc(k)}" ${k === t.task ? "selected" : ""}>${esc(v.label)}</option>`).join("")}</select></div>
       </div>
       <div id="tr-textcol"></div>
       <div class="form-grid">
         <div class="form-row"><label>标签列（预测目标）</label>
           <select id="tr-target">${ds && ds.columns ? ds.columns.map((c, i) => `<option value="${esc(c)}" ${(t.target || ds.columns[ds.columns.length - 1]) === c ? "selected" : ""}>${esc(c)}${i === ds.columns.length - 1 ? "（默认）" : ""}</option>`).join("") : "<option value=\"\">使用最后一列</option>"}</select></div>
-        <div class="form-row"><label>测试集占比 / 随机种子</label>
-          <div class="row-flex"><input id="tr-testsize" type="number" step="0.05" min="0.05" max="0.5" value="${t.testSize}" style="flex:1">
-          <input id="tr-seed" type="number" value="${t.seed}" style="flex:1" title="随机种子"></div>
-          <div class="hint">固定随机种子保证实验可复现，论文里要写</div></div>
+        <div class="form-row"><label>数据划分与随机种子</label>
+          <div class="row-flex">
+            <label class="split-field">测试集<input id="tr-testsize" type="number" step="0.05" min="0" max="0.5" value="${t.testSize}"></label>
+            <label class="split-field" id="tr-valwrap" ${isImage ? "" : "hidden"}>验证集<input id="tr-valsize" type="number" step="0.05" min="0.05" max="0.5" value="${t.valSplit}"></label>
+            <label class="split-field">种子<input id="tr-seed" type="number" value="${t.seed}" title="随机种子"></label>
+          </div>
+          <div class="hint" id="tr-split-hint"></div></div>
       </div>
     </div>
     <div class="section"><h2>选择模型</h2>
@@ -395,6 +401,11 @@ async function pageTrain() {
   document.querySelectorAll("[data-p]").forEach((inp) => inp.onchange = () => { state.train.params[inp.dataset.p] = inp.value; });
   $("#tr-testsize").onchange = (e) => (state.train.testSize = parseFloat(e.target.value) || 0.2);
   $("#tr-seed").onchange = (e) => (state.train.seed = parseInt(e.target.value) || 42);
+  const vs = $("#tr-valsize");
+  if (vs) vs.onchange = (e) => (state.train.valSplit = parseFloat(e.target.value) || 0.2);
+  $("#tr-split-hint").textContent = isImage
+    ? "图像任务按 训练 / 验证 / 测试 三份划分：权重只在训练集更新，best.pt 按验证集挑选，最终指标来自测试集（评估一次，不再回调）。固定随机种子保证可复现，论文里要写。"
+    : "先划分再预处理：填充与标准化只在训练集上拟合，测试集只评估一次。固定随机种子保证实验可复现，论文里要写。";
   $("#tr-target").onchange = (e) => (state.train.target = e.target.value);
 
   if (t.task === "text_classification") {
@@ -416,7 +427,8 @@ async function pageTrain() {
       const body = {
         dataset_id: state.train.datasetId, task: state.train.task, model: state.train.model,
         params: state.train.params, target: state.train.target || null,
-        text_column: state.train.textColumn || null, test_size: state.train.testSize, random_state: state.train.seed,
+        text_column: state.train.textColumn || null, test_size: state.train.testSize,
+        val_split: state.train.valSplit, random_state: state.train.seed,
       };
       const r = await api("/api/runs", { method: "POST", body });
       toast(`实验已启动：${r.run_id}`, "success");
@@ -428,6 +440,13 @@ async function pageTrain() {
 
 /* ================= 实验记录页 ================= */
 function statusText(s) { return `<span class="status ${esc(s)}">${{ running: "训练中", done: "已完成", failed: "失败", cancelled: "已取消" }[s] || s}</span>`; }
+
+/* 指标来自哪一份数据：test_* 才是独立测试集，val_* 只是调参用的验证集 */
+function metricSourceNote(s) {
+  if (s.split_scheme === "train/val/test" || (s.n_test || 0) > 0) return "（测试集）";
+  if (s.eval_source === "val" || s.n_test === 0) return "（验证集，非测试集）";
+  return "";
+}
 
 function runsTable(runs) {
   return `<table class="data"><thead><tr><th>实验 ID</th><th>数据集</th><th>模型</th><th>状态</th><th>主指标</th><th>时间</th></tr></thead>
@@ -497,7 +516,8 @@ async function openRun(id, silent = false) {
           数据集 ${esc(d.config.dataset_name || "-")} ｜ 模型 ${esc(d.config.model_label || d.config.model || "-")}
           ｜ 参数 ${esc(fmtParams(d.config.params))}
         </div>
-        ${d.state === "done" && s.primary_metric ? `<div class="kv-row"><div class="kv"><b style="color:var(--accent);font-size:23px">${fmtNum(s.primary_metric.value)}</b>最优 ${esc(s.primary_metric.name)}</div>${metricsHtml}
+        ${d.state === "done" && s.primary_metric ? `<div class="kv-row"><div class="kv"><b style="color:var(--accent);font-size:23px">${fmtNum(s.primary_metric.value)}</b>主指标 ${esc(s.primary_metric.name)}${esc(metricSourceNote(s))}</div>${metricsHtml}
+          <div class="kv"><b>${esc(s.n_train || "-")}/${esc(s.n_val || "-")}/${esc(s.n_test || "-")}</b>训练/验证/测试</div>
           <div class="kv"><b>${esc(s.train_time_sec || "-")}s</b>训练用时</div></div>` : ""}
         ${epochRows.length > 1 ? `<div class="mt14">${lineChart([
           { name: "train_loss", color: C.teal, points: epochRows.map((e) => e.train_loss) },

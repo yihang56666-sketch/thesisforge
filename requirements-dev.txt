@@ -1,0 +1,2 @@
+# ThesisForge 开发/打包机专用依赖（终端用户无需安装）
+pyinstaller>=6.0
