@@ -133,8 +133,12 @@ const state = {
 const ROUTES = { dashboard: pageDashboard, datasets: pageDatasets, train: pageTrain, runs: pageRuns, compare: pageCompare, report: pageReport, ai: pageAI, guide: pageGuide };
 
 function route() {
-  const name = (location.hash || "#/dashboard").replace(/^#\//, "") || "dashboard";
+  const name = (location.hash || "#/wizard").replace(/^#\//, "") || "wizard";
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === name));
+  if (name === "wizard") {
+    renderWizard().catch((e) => { $("#page").innerHTML = `<div class="panel"><div class="empty">页面加载失败：${esc(e.message)}</div></div>`; });
+    return;
+  }
   const fn = ROUTES[name] || pageDashboard;
   fn().catch((e) => { $("#page").innerHTML = `<div class="panel"><div class="empty">页面加载失败：${esc(e.message)}</div></div>`; });
 }
@@ -1042,7 +1046,7 @@ function updateSidebar() {
     $("#sidebar-status").textContent = "后端连接失败";
   }
   route();
-  if (!localStorage.getItem("tf_onboarded")) setTimeout(() => showTour(0), 400);
+  // 有了 10 步毕设向导后，不再自动弹旧版新手引导弹窗；侧栏「新手引导」仍可手动重看。
   $("#btn-tour").onclick = () => showTour(0);
   $("#btn-browser").onclick = async () => {
     const bridge = tfBridge();
