@@ -25,6 +25,29 @@ function toast(msg, type = "") {
   setTimeout(() => t.remove(), 4200);
 }
 
+/* pywebview 不弹原生 confirm，统一用应用内面板，避免“弹窗啥也没有”。 */
+function confirmInApp(title, message, okText = "确认删除") {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `<div class="modal-box" role="alertdialog" aria-modal="true">
+      <div class="modal-title">${esc(title)}</div>
+      <div class="modal-msg">${esc(message)}</div>
+      <div class="row-flex mt8 righted">
+        <button class="btn small" data-act="cancel">取消</button>
+        <button class="btn danger small ml8" data-act="ok">${esc(okText)}</button>
+      </div>
+    </div>`;
+    const close = (result) => { overlay.remove(); resolve(result); };
+    overlay.querySelector('[data-act="cancel"]').onclick = () => close(false);
+    overlay.querySelector('[data-act="ok"]').onclick = () => close(true);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
+    document.body.appendChild(overlay);
+    const ok = overlay.querySelector('[data-act="ok"]');
+    if (ok) ok.focus();
+  });
+}
+
 function mdToHtml(text) {
   const lines = String(text || "").split("\n");
   const out = [];
@@ -312,7 +335,7 @@ async function pageDatasets() {
   };
   document.querySelectorAll("[data-ds]").forEach((tr) => tr.onclick = (e) => { if (e.target.closest("[data-del-ds]")) return; openDataset(tr.dataset.ds); });
   document.querySelectorAll("[data-del-ds]").forEach((b) => b.onclick = async () => {
-    if (!confirm("确定删除该数据集？")) return;
+    if (!(await confirmInApp("删除数据集", "确定删除该数据集？相关实验记录不会自动删除。"))) return;
     try { await api("/api/datasets/" + b.dataset.delDs, { method: "DELETE" }); toast("已删除", "success"); if (state.openDataset === b.dataset.delDs) state.openDataset = null; pageDatasets(); } catch (e) { toast(e.message, "error"); }
   });
   if (state.openDataset) openDataset(state.openDataset);
@@ -624,11 +647,25 @@ async function openRun(id, silent = false) {
       }
     };
     if ($("#btn-repeat")) $("#btn-repeat").onclick = () => {
-      const c = prompt("重复次数（2-10，默认 3）：", "3");
-      if (c === null) return;
-      const n = parseInt(c, 10);
-      if (!n || n < 2 || n > 10) return toast("次数需在 2-10 之间", "error");
-      launchBatch(n);
+      const old = box.querySelector(".repeat-panel");
+      if (old) old.remove();
+      const panel = document.createElement("div");
+      panel.className = "panel mt14 repeat-panel";
+      panel.innerHTML = `<b>重复实验</b><div class="hint">克隆当前实验，仅随机种子不同，跑多次后取均值 ± 标准差。</div>
+        <div class="form-grid mt8"><div class="form-row">
+          <label for="repeat-count">重复次数（2-10）</label>
+          <input id="repeat-count" type="number" min="2" max="10" step="1" value="3">
+        </div></div>
+        <div class="row-flex mt8"><button class="btn accent small" id="btn-repeat-go">启动重复实验</button><button class="btn small" id="btn-repeat-cancel">取消</button></div>`;
+      const anchor = $(".meta-box", box) || box.lastElementChild;
+      anchor.after(panel);
+      $("#btn-repeat-cancel").onclick = () => panel.remove();
+      $("#btn-repeat-go").onclick = () => {
+        const n = parseInt($("#repeat-count").value, 10);
+        if (!n || n < 2 || n > 10) return toast("次数需在 2-10 之间", "error");
+        panel.remove();
+        launchBatch(n);
+      };
     };
     if ($("#btn-ablation")) $("#btn-ablation").onclick = () => {
       if (d.state !== "done") return;
@@ -656,7 +693,7 @@ async function openRun(id, silent = false) {
       if (!rows) return toast("该实验没有可消融的超参数", "error");
       const panel = document.createElement("div");
       panel.className = "panel mt14 ablation-panel";
-      panel.innerHTML = `<b>一键消融</b><div class="hint">每个勾选项派生一个全新实验，只改所选参数，其余参数与源实验一致；派生实验使用独立随机种子。</div>
+      panel.innerHTML = `<b>一键消融</b><div class="hint">每个勾选项派生一个全新实验，只改所选参数，其余参数与源实验保持一致（含随机种子）。</div>
         <div class="form-grid mt8">${rows}</div>
         <div class="row-flex mt8"><button class="btn accent small" id="btn-ablation-go">启动消融实验</button><button class="btn small" id="btn-ablation-cancel">取消</button></div>`;
       const old = box.querySelector(".ablation-panel");
@@ -709,7 +746,7 @@ async function openRun(id, silent = false) {
     };
     if ($("#btn-cancel")) $("#btn-cancel").onclick = async () => { try { await api(`/api/runs/${id}/cancel`, { method: "POST" }); toast("已发送取消请求", "success"); openRun(id); } catch (e) { toast(e.message, "error"); } };
     $("#btn-del").onclick = async () => {
-      if (!confirm("确定删除该实验及其所有文件？")) return;
+      if (!(await confirmInApp("删除实验", "确定删除该实验及其所有文件？此操作不可恢复。"))) return;
       try { await api("/api/runs/" + id, { method: "DELETE" }); toast("已删除", "success"); state.openRun = null; pageRuns(); } catch (e) { toast(e.message, "error"); }
     };
     if (running) {

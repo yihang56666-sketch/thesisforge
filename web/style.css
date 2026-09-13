@@ -318,6 +318,43 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 .toast.success { background: var(--accent); }
 @keyframes slidein { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
 
+/* 应用内确认面板：pywebview 下原生 confirm 无窗口，必须走 DOM 弹层 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 20, 18, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.modal-box {
+  width: min(420px, calc(100vw - 40px));
+  padding: 18px 20px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(12, 20, 16, 0.25);
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #17211d;
+}
+
+.modal-msg {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #4b5650;
+}
+
+.righted {
+  justify-content: flex-end;
+}
+
 /* ---------- 窄屏/小窗口：侧栏收为顶部导航 ---------- */
 @media (max-width: 900px) {
   .layout { flex-direction: column; }

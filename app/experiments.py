@@ -282,19 +282,6 @@ def _coerce_param(spec: dict, key: str, value):
     return clean
 
 
-def _next_derived_seed(params: dict, batch_id: str, offset: int) -> int:
-    """派生实验保持独立随机性：在批内用 batch_id 派生确定性偏移。"""
-    base = params.get("seed")
-    if base is None:
-        base = _BATCH_BASE_SEED
-    try:
-        base = max(0, min(int(base), _BATCH_MAX_SEED))
-    except (TypeError, ValueError):
-        base = _BATCH_BASE_SEED
-    extra = (int(batch_id, 16) + offset) % 1000
-    return min(base + extra, _BATCH_MAX_SEED)
-
-
 def _next_repeat_seed(seed, offset: int) -> int:
     """重复实验只在随机种子上加偏移，保证唯一且仍在 int 范围内。"""
     try:
@@ -383,8 +370,6 @@ def create_batch_ablation(source_run_id: str, overrides: dict[str, list]) -> lis
             cfg.pop("repeat_index", None)
             params = dict(base.get("params") or {})
             params[param] = clean
-            if "seed" in schema:
-                params["seed"] = _next_derived_seed(params, batch_id, position * 100 + len(run_ids))
             cfg["params"] = params
             run_ids.append(runner.create_run(cfg, _run_kind(engine)))
     return run_ids

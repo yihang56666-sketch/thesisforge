@@ -263,7 +263,6 @@ def main() -> int:
                     fpr, tpr, _ = roc_curve((y_te == pos_label).astype(int), proba)
                     auc = float(roc_auc_score((y_te == pos_label).astype(int), proba))
                     metrics["roc_auc"] = auc
-                    summary["primary_metric"]["auc"] = auc
                     plot_roc(fpr, tpr, auc, safe(run_dir, "roc.png"))
                     artifacts.append("roc.png")
                 except Exception as e:
