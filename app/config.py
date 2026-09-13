@@ -41,6 +41,7 @@ RUNS_DIR = DATA_DIR / "runs"
 EXPORTS_DIR = DATA_DIR / "exports"
 UPLOADS_DIR = DATA_DIR / "uploads"
 CONFIG_FILE = DATA_DIR / "runtime_config.json"
+PROJECT_FILE = DATA_DIR / "project.json"
 LAUNCH_LOG = DATA_DIR / "logs" / "launch.log"
 
 APP_VERSION = "0.3.0"
