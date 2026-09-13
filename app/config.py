@@ -41,7 +41,7 @@ EXPORTS_DIR = DATA_DIR / "exports"
 UPLOADS_DIR = DATA_DIR / "uploads"
 CONFIG_FILE = DATA_DIR / "runtime_config.json"
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 
 DEFAULT_RUNTIME_CONFIG: dict = {
     # OpenAI 兼容接口地址，如 https://api.deepseek.com/v1

@@ -29,6 +29,19 @@ _RUN_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 _RUNS_ROOT = str(RUNS_DIR.resolve())
 _ALLOWED_SCRIPTS = {"train_sklearn.py", "train_torch.py"}
 
+GROUP_BASELINE = "baseline"
+GROUP_IMPROVED = "improved"
+GROUP_ABLATION = "ablation"
+GROUP_CUSTOM = "custom"
+GROUPS = (GROUP_BASELINE, GROUP_IMPROVED, GROUP_ABLATION, GROUP_CUSTOM)
+
+GROUP_LABELS = {
+    GROUP_BASELINE: "基线",
+    GROUP_IMPROVED: "改进",
+    GROUP_ABLATION: "消融",
+    GROUP_CUSTOM: "自定义",
+}
+
 
 def _safe_child(base: Path, name: str) -> Path:
     """规范化 base/name：拒绝 '..' 并确保结果限制在 base 目录内。"""
@@ -178,6 +191,50 @@ def read_summary(run_id: str) -> dict | None:
     return None
 
 
+def read_meta(run_id: str) -> dict:
+    """读取实验元数据；旧实验没有元数据时补齐默认值。"""
+    try:
+        cfg = json.loads(_safe_child(run_dir_of(run_id), "config.json").read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    return {
+        "name": cfg.get("name") or "",
+        "group": cfg.get("group") if cfg.get("group") in GROUPS else GROUP_BASELINE,
+        "note": cfg.get("note") or "",
+    }
+
+
+def update_meta(run_id: str, update: dict) -> dict:
+    """更新实验名称/分组/备注；分组非法时直接拒绝。"""
+    run_dir = run_dir_of(run_id)
+    if not run_dir.exists():
+        raise FileNotFoundError(run_id)
+    cfg_path = _safe_child(run_dir, "config.json")
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    meta = read_meta(run_id)
+    for key in ("name", "group", "note"):
+        if key not in update:
+            continue
+        value = update[key]
+        if key == "group":
+            value = (value or "").strip()
+            if value not in GROUPS:
+                raise ValueError("实验分组必须是 baseline/improved/ablation/custom 之一")
+        else:
+            value = "" if value is None else str(value).strip()
+        if key == "name":
+            value = value[:80]
+        elif key == "note":
+            value = value[:500]
+        cfg[key] = value
+        meta[key] = value
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return meta
+
+
 def read_metrics_log(run_id: str) -> list[dict]:
     p = _safe_child(run_dir_of(run_id), "metrics.jsonl")
     if not p.exists():
@@ -221,10 +278,14 @@ def list_runs() -> list[dict]:
             pass
         status = read_status(d.name)
         summary = read_summary(d.name) or {}
+        meta = read_meta(d.name)
         out.append({
             "run_id": d.name,
             "state": status.get("state"),
             "error": status.get("error"),
+            "name": meta["name"],
+            "group": meta["group"],
+            "note": meta["note"],
             "dataset_name": cfg.get("dataset_name"),
             "task": cfg.get("task"),
             "model": cfg.get("model"),
@@ -246,11 +307,15 @@ def run_detail(run_id: str) -> dict:
         cfg = {}
     status = read_status(run_id)
     summary = read_summary(run_id)
+    meta = read_meta(run_id)
     artifacts = sorted([p.name for p in run_dir.iterdir() if p.suffix == ".png"])
     return {
         "run_id": run_id,
         "state": status.get("state"),
         "error": status.get("error"),
+        "name": meta["name"],
+        "group": meta["group"],
+        "note": meta["note"],
         "config": cfg,
         "summary": summary,
         "metrics_log": read_metrics_log(run_id),

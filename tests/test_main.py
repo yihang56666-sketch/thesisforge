@@ -1,11 +1,51 @@
 # -*- coding: utf-8 -*-
 import _isolate  # noqa: F401
 
+import json
+import time
 import unittest
+import uuid
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
+from app import datasets_hub, runner
 from app.main import app
+
+
+def _headers():
+    return {"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765"}
+
+
+def _make_fake_dataset():
+    ds_id = "apitest-ds"
+    d = datasets_hub.dataset_dir(ds_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "meta.json").write_text(json.dumps({
+        "id": ds_id, "name": "API测试数据", "type": "tabular",
+        "target": "target", "columns": ["x", "target"],
+        "task": "tabular_classification", "n_rows": 20,
+    }, ensure_ascii=False), encoding="utf-8")
+    return ds_id
+
+
+def _make_run(rid, *, name="", group="baseline", note="", state="done",
+              metrics=None, primary=None):
+    d = runner.run_dir_of(rid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.json").write_text(json.dumps({
+        "dataset_id": "apitest-ds", "dataset_name": "API测试数据",
+        "task": "tabular_classification", "model": "random_forest",
+        "model_label": "随机森林", "params": {"n_estimators": 100},
+        "name": name, "group": group, "note": note,
+        "created_at": "2026-09-13 10:00:00",
+    }, ensure_ascii=False), encoding="utf-8")
+    (d / "status.json").write_text(json.dumps({"state": state}), encoding="utf-8")
+    if metrics is not None:
+        summary = {"metrics": metrics}
+        if primary is not None:
+            summary["primary_metric"] = primary
+        (d / "summary.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
 
 
 class LocalOriginGuardTest(unittest.TestCase):
@@ -33,6 +73,80 @@ class LocalOriginGuardTest(unittest.TestCase):
             headers={"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765"},
         )
         self.assertEqual(r.status_code, 200)
+
+
+class ExperimentApiTest(unittest.TestCase):
+    def setUp(self):
+        _make_fake_dataset()
+        self.client = TestClient(app)
+        self.headers = _headers()
+
+    def test_create_run_persists_name_group_note(self):
+        captured = {}
+
+        def fake_create(config, script):
+            rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            captured["config"] = config
+            captured["script"] = script
+            d = runner.run_dir_of(rid)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "config.json").write_text(json.dumps(config, ensure_ascii=False),
+                                           encoding="utf-8")
+            (d / "status.json").write_text(json.dumps({"state": "running"}),
+                                           encoding="utf-8")
+            return rid
+
+        with mock.patch.object(runner, "create_run", side_effect=fake_create):
+            r = self.client.post("/api/runs", json={
+                "dataset_id": "apitest-ds", "task": "tabular_classification",
+                "model": "random_forest", "params": {"n_estimators": 100},
+                "name": "基线实验", "group": "baseline", "note": "第一组",
+            }, headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(captured["config"]["name"], "基线实验")
+        self.assertEqual(captured["config"]["group"], "baseline")
+        self.assertEqual(captured["config"]["note"], "第一组")
+
+    def test_patch_meta_updates_config(self):
+        rid = "20260913-101500-ca1a1a"
+        _make_run(rid, name="旧名字", group="baseline", note="旧备注")
+        r = self.client.patch(f"/api/runs/{rid}/meta", json={
+            "name": "新名字", "group": "improved", "note": "新备注",
+        }, headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["meta"],
+                         {"name": "新名字", "group": "improved", "note": "新备注"})
+        cfg = json.loads((runner.run_dir_of(rid) / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["group"], "improved")
+
+    def test_patch_meta_rejects_unknown_group(self):
+        rid = "20260913-101500-ca1a1b"
+        _make_run(rid, group="baseline")
+        r = self.client.patch(f"/api/runs/{rid}/meta", json={"group": "weird"},
+                              headers=self.headers)
+        self.assertEqual(r.status_code, 400)
+
+    def test_compare_returns_sorted_metric_table(self):
+        for rid, name, group, acc in [
+            ("20260913-101500-ca1a1c", "基线", "baseline", 0.85),
+            ("20260913-101500-ca1a1d", "改进", "improved", 0.91),
+            ("20260913-101500-ca1a1e", "消融", "ablation", 0.87),
+        ]:
+            _make_run(rid, name=name, group=group,
+                      metrics={"accuracy": acc, "f1": round(acc - 0.02, 2)},
+                      primary={"name": "accuracy", "value": acc})
+        r = self.client.post("/api/experiments/compare", json={
+            "run_ids": ["20260913-101500-ca1a1e", "20260913-101500-ca1a1c",
+                        "20260913-101500-ca1a1d"],
+        }, headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["count"], 3)
+        self.assertEqual([c["group"] for c in body["columns"]],
+                         ["baseline", "improved", "ablation"])
+        self.assertTrue(body["metric_rows"][0]["is_primary"])
+        self.assertEqual(body["metric_rows"][0]["values"], [0.85, 0.91, 0.87])
+        self.assertIn("基线", body["csv"])
 
 
 if __name__ == "__main__":

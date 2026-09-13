@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, catalog, datasets_hub, humanize, report, runner
+from . import ai, catalog, datasets_hub, experiments, humanize, report, runner
 from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
     ensure_dirs, load_runtime_config, resolve_api_key, save_runtime_config,
@@ -286,6 +286,9 @@ class CreateRunReq(BaseModel):
     test_size: float = 0.2
     random_state: int = 42
     val_split: float = 0.2
+    name: str | None = None
+    group: str | None = None
+    note: str | None = None
 
 
 @app.post("/api/runs")
@@ -339,6 +342,9 @@ def create_run(req: CreateRunReq):
 
     ds_dir = ds_dir_of(req.dataset_id)
     config = {
+        "name": (req.name or "").strip()[:80],
+        "group": req.group if req.group in runner.GROUPS else runner.GROUP_BASELINE,
+        "note": (req.note or "").strip()[:500],
         "dataset_id": req.dataset_id,
         "dataset_name": ds_meta.get("name"),
         "dataset_dir": str(ds_dir),
@@ -360,6 +366,23 @@ def create_run(req: CreateRunReq):
 @app.get("/api/runs")
 def list_runs():
     return {"runs": runner.list_runs()}
+
+
+class RunMetaReq(BaseModel):
+    name: str | None = None
+    group: str | None = None
+    note: str | None = None
+
+
+@app.patch("/api/runs/{run_id}/meta")
+def update_run_meta(run_id: str, req: RunMetaReq):
+    try:
+        meta = runner.update_meta(run_id, req.model_dump(exclude_none=True))
+        return {"ok": True, "meta": meta}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError:
+        raise HTTPException(404, "实验不存在")
 
 
 @app.get("/api/runs/{run_id}")
@@ -445,6 +468,19 @@ async def analyze_run(run_id: str):
     return r
 
 
+# ================================================================ 实验对比
+class CompareReq(BaseModel):
+    run_ids: list[str] = []
+
+
+@app.post("/api/experiments/compare")
+def compare_experiments(req: CompareReq):
+    try:
+        return experiments.build_comparison(req.run_ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ================================================================ AIGC 自检与降 AI 味
 class HumanizeCheckReq(BaseModel):
     text: str
@@ -505,7 +541,9 @@ async def generate_report(req: ReportReq):
         if d["state"] != "done" or not d["summary"]:
             continue
         runs.append({"run_id": rid, "config": d["config"], "summary": d["summary"],
-                     "run_dir": str(RUNS_DIR / rid)})
+                     "run_dir": str(RUNS_DIR / rid),
+                     "name": d["config"].get("name"),
+                     "group": d["config"].get("group") or runner.GROUP_BASELINE})
 
     dataset_meta, dataset_dir = None, None
     if req.dataset_id:
@@ -622,5 +660,19 @@ def run_server(host: str = "127.0.0.1", port: int | None = None, open_browser: b
         print("\n已退出。", flush=True)
 
 
+def main(argv: list[str] | None = None) -> int:
+    """统一启动入口：解析 --browser/--no-window/THESISFORGE_MODE 后启动对应形态。"""
+    from .desktop import resolve_startup_mode, run_browser, run_desktop, run_headless
+
+    mode = resolve_startup_mode(argv if argv is not None else sys.argv[1:])
+    if mode == "headless":
+        run_headless()
+    elif mode == "browser":
+        run_browser()
+    else:
+        run_desktop()
+    return 0
+
+
 if __name__ == "__main__":
-    run_server()
+    sys.exit(main())

@@ -5,9 +5,11 @@
    PyInstaller 下 sys.executable 指向 EXE 本身，直接再拉起会启动第二个 Web 服务。
    runner.worker_cmd 因此在 frozen 时改用 --tf-worker 让同一个 EXE 跑训练脚本。
 2) 启动器模式：EXE 与 runtime\\python.exe 同包（离线整合包）。
-   交给内嵌 Python 跑源码，功能完整（可自行安装 PyTorch 做图像训练）。
-3) 独立模式：单文件 EXE，直接在本进程内起服务。
-   为控制体积不打包 PyTorch，图像分类会返回明确提示，其余任务开箱即用。
+   交给内嵌 Python 跑源码（THESISFORGE_MODE=desktop），功能完整
+   （可自行安装 PyTorch 与 WebView2 做图像训练/桌面窗口）。
+3) 独立模式：单文件 EXE，默认进入 pywebview 桌面窗口，WebView2
+   缺失时自动降级为浏览器。为控制体积不打包 PyTorch，图像分类会
+   返回明确提示，其余任务开箱即用。
 """
 import os
 import subprocess
@@ -61,9 +63,10 @@ def _run_with_runtime(runtime: Path, exe_dir: Path) -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(exe_dir) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONUNBUFFERED"] = "1"
+    env["THESISFORGE_MODE"] = "desktop"
     if "--no-browser" in sys.argv[1:]:
         env["THESISFORGE_NO_BROWSER"] = "1"
-    cmd = [str(runtime), "-u", "-m", "app.main"]
+    cmd = [str(runtime), "-u", "-m", "app.main"] + sys.argv[1:]
     try:
         return subprocess.call(cmd, cwd=str(exe_dir), env=env)
     except OSError as e:
@@ -91,14 +94,13 @@ def main() -> int:
         return _run_with_runtime(runtime, exe_dir)
 
     try:
-        from app.main import run_server
+        from app.main import main
     except ImportError as e:
         print(f"[ThesisForge] 启动失败，运行库不完整：{e}", file=sys.stderr)
         if not getattr(sys, "frozen", False):
             print("开发环境请使用：python -m app.main", file=sys.stderr)
         return 1
-    run_server(open_browser="--no-browser" not in argv)
-    return 0
+    return main(argv)
 
 
 if __name__ == "__main__":

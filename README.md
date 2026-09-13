@@ -1,6 +1,6 @@
 # 毕设工坊 ThesisForge
 
-面向人工智能专业毕业设计的**一站式本地可视化工作台**：找数据集 → 表单化调参训练模型 → 实验留档对比 → AIGC 自检与降 AI 味 → 按学位论文规范一键生成 Word 初稿。全程网页操作，无需写命令行。
+面向人工智能专业毕业设计的**一站式本地可视化工作台**：找数据集 → 表单化调参训练模型 → 实验留档对比 → AIGC 自检与降 AI 味 → 按学位论文规范一键生成 Word 初稿。全程可视化界面操作（Windows 桌面窗口或浏览器），无需写命令行。
 
 > 纯本地运行：数据、实验记录、API Key 都只存在你自己的电脑上（`data/` 目录，已被 gitignore）。
 
@@ -26,15 +26,15 @@
 
 ### 方式一：Windows 离线整合包（推荐新手）
 
-到 [Releases](../../releases) 下载 `ThesisForge-v0.2.1-win64-offline.zip`（无需安装 Python，解压即用）：
+到 [Releases](../../releases) 下载 `ThesisForge-v0.3.0-win64-offline.zip`（无需安装 Python，解压即用）：
 
 1. 解压到任意目录；
-2. 双击 `ThesisForge.exe`（或 `启动毕设工坊.bat`），浏览器会自动打开；
+2. 双击 `ThesisForge.exe`（或 `启动毕设工坊.bat`），默认打开 Windows 桌面窗口（未装 WebView2 时自动改用浏览器）；
 3. 首次使用会弹出新手引导，照着总览页清单做即可。
 
 图像分类训练需要 PyTorch：双击包内 `安装图像训练-CPU版.bat`（或 `安装图像训练-GPU版.bat`，需 NVIDIA 显卡）。
 
-不想解压也可以下载独立单文件版 `ThesisForge-v0.2.1-win-x64.exe`，双击即用（自带 Python 与表格/文本/报告全部依赖；为控制体积不含 PyTorch，图像训练请用离线整合包）。
+不想解压也可以下载独立单文件版 `ThesisForge-v0.3.0-win-x64.exe`，双击即用（自带 Python 与表格/文本/报告全部依赖；为控制体积不含 PyTorch，图像训练请用离线整合包）。
 
 ### 方式二：从源码运行（Python 3.10+）
 
@@ -42,9 +42,11 @@
 git clone https://github.com/Yihang56666-sketch/thesisforge.git
 cd thesisforge
 pip install -r requirements.txt
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+python -m app.main
 # 或直接双击 start.bat（Windows）
 ```
+
+想固定用浏览器打开：`python -m app.main --browser`；后台无界面运行：`python -m app.main --no-browser`。
 
 图像训练（可选）：`pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`
 
@@ -57,8 +59,9 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 1. **数据集** 页载入「乳腺癌威斯康星」；
 2. **模型训练** 页选逻辑回归 → 开始训练（基线）；
 3. 再换随机森林、GBDT 各跑一次（对比）；
-4. **实验记录** 页点开看曲线和混淆矩阵，点「AI 分析」拿改进建议；
-5. **报告工坊** 勾选实验 → 生成论文初稿；打开文档后 `Ctrl+A → F9` 更新目录。
+4. 给实验填上「基线/改进/消融」分组，**实验对比**页勾选几组实验生成对比表并导出 CSV/Markdown；
+5. **实验记录** 页点开看曲线和混淆矩阵，点「AI 分析」拿改进建议；
+6. **报告工坊** 勾选实验 → 生成论文初稿；打开文档后 `Ctrl+A → F9` 更新目录。
 
 ## AI 接口配置
 
@@ -96,6 +99,8 @@ thesisforge/
 │   ├── ai.py            # LLM 客户端 + 内置规则分析器
 │   ├── humanize.py      # AIGC 自检 + 降 AI 味规则引擎
 │   ├── plots.py         # matplotlib 中文图表
+│   ├── experiments.py   # 实验分组/排序/对比表 CSV+Markdown
+│   ├── desktop.py       # 桌面窗口/浏览器/无头启动与降级
 │   └── report.py        # python-docx 论文生成（三线表/域/GB7714）
 ├── web/                 # 前端（原生 JS + SVG 图表，无构建步骤）
 ├── tests/               # 单元测试（路径安全/SSRF/参数清洗/报告等）

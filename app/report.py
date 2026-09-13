@@ -23,6 +23,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from .catalog import get_model_spec
+from .experiments import GROUP_LABELS, group_rank
 
 INK = RGBColor(0, 0, 0)
 GRAY = RGBColor(0x66, 0x66, 0x66)
@@ -250,6 +251,8 @@ def build_report(
     drafts: dict[str, str],
 ) -> Path:
     """runs: [{run_id, config, summary, run_dir}]；drafts: 章节键 → 正文文本（已去过 AI 味）。"""
+    runs = sorted(runs, key=lambda r: (group_rank(r["config"].get("group") or "baseline"),
+                                       r.get("name") or "", r.get("run_id") or ""))
     doc = Document()
     _setup_styles(doc)
     school = (author_info or {}).get("school") or ""
@@ -408,11 +411,13 @@ def build_report(
         for r in runs:
             cfg = r["config"]; s = r["summary"] or {}
             pm = s.get("primary_metric") or {}
-            rows.append([cfg.get("dataset_name", "-"), s.get("model_label", cfg.get("model", "-")),
+            group = cfg.get("group") or "baseline"
+            rows.append([GROUP_LABELS.get(group, group),
+                         cfg.get("dataset_name", "-"), s.get("model_label", cfg.get("model", "-")),
                          json_params_short(cfg.get("params")),
                          f"{pm.get('name', '-')} = {fmt_val(pm.get('value', '-'))}",
                          f"{s.get('n_train', '-')}/{s.get('n_test', s.get('n_val', '-'))}"])
-        _three_line_table(doc, ["数据集", "模型", "主要超参数", "主指标", "训练/测试样本"],
+        _three_line_table(doc, ["实验分组", "数据集", "模型", "主要超参数", "主指标", "训练/测试样本"],
                           rows, caption="表 4-2  实验结果对比")
         _para(doc, "注：主指标均为未参与训练的评估样本结果。图像任务区分训练/验证/测试集，"
                    "test_* 为独立测试集结果（仅在最终评估时使用一次），val_* 为验证集结果"

@@ -5,7 +5,8 @@
    放进离线整合包根目录，与 runtime\\python.exe 配对；双击即可，不用碰 .bat。
 
 2) 独立单文件 EXE（大） dist/ThesisForge-vX.Y.Z-win-x64.exe
-   自带 Python 与全部科学计算依赖，双击就能跑表格/文本任务。
+   自带 Python 与全部科学计算依赖，默认打开桌面窗口（WebView2 缺失时自动
+   降级为浏览器），双击就能跑表格/文本任务。
    刻意排除 torch：CUDA 版体积超过 GitHub 单文件 2GB 限制，
    图像训练请用离线整合包（内嵌 Python + 一键安装脚本）。
 
@@ -99,7 +100,7 @@ def build_launcher() -> Path:
         "--exclude-module", "scipy", "--exclude-module", "matplotlib",
         "--exclude-module", "fastapi", "--exclude-module", "uvicorn",
         "--exclude-module", "docx", "--exclude-module", "httpx",
-        "--exclude-module", "PIL",
+        "--exclude-module", "PIL", "--exclude-module", "webview",
     ]
     cmd.append(str(ENTRY))
     subprocess.run(cmd, check=True, cwd=str(ROOT))

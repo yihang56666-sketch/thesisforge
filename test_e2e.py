@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """端到端回归测试：需要服务器已在 127.0.0.1:8765 运行。
 
-覆盖三条训练路径（表格 / 文本 / 图像）与报告生成。
+覆盖三条训练路径（表格 / 文本 / 图像）、实验元数据与对比导出、报告生成。
 运行：python test_e2e.py
 """
 import csv
@@ -106,17 +106,36 @@ def main():
     print(f"图像训练 [{d['state']}]:", s.get("primary_metric"), "device:", s.get("device"))
     assert d["state"] == "done", c.get(f"{BASE}/api/runs/{img_run}/log").json()["log"][-1000:]
 
-    # 4. AI 分析（未配置 Key 时走内置规则分析器）
+    # 4. 实验元数据与对比导出
+    r = c.patch(f"{BASE}/api/runs/{iris_run}/meta", json={
+        "name": "基线-随机森林", "group": "baseline", "note": "E2E 基线"})
+    meta = r.json()["meta"]
+    print("实验元数据:", meta)
+    assert meta["group"] == "baseline" and meta["name"] == "基线-随机森林"
+    c.patch(f"{BASE}/api/runs/{text_run}/meta", json={"group": "improved"})
+    c.patch(f"{BASE}/api/runs/{img_run}/meta", json={"group": "ablation"})
+    cmp = c.post(f"{BASE}/api/experiments/compare", json={
+        "run_ids": [iris_run, text_run, img_run]}).json()
+    print("实验对比:", cmp.get("count"), "组",
+          [col["group"] for col in cmp.get("columns", [])])
+    assert cmp["count"] == 3
+    assert [col["group"] for col in cmp["columns"]] == ["baseline", "improved", "ablation"]
+    assert cmp["metric_rows"][0]["is_primary"]
+    assert "基线-随机森林" in cmp["csv"]
+    assert cmp["markdown"].startswith("| 指标 |")
+    print("对比 CSV 首行:", cmp["csv"].splitlines()[0])
+
+    # 5. AI 分析（未配置 Key 时走内置规则分析器）
     r = c.post(f"{BASE}/api/runs/{iris_run}/analyze").json()
     print("AI 分析来源:", r["source"], "| 字数:", len(r["text"]))
 
-    # 5. AIGC 自检与改写
+    # 6. AIGC 自检与改写
     sample = "值得注意的是，随着人工智能的不断发展，本文极大地提升了性能。综上所述，效果非常好。"
     chk = c.post(f"{BASE}/api/humanize/check", json={"text": sample}).json()
     rw = c.post(f"{BASE}/api/humanize/rewrite", json={"text": sample}).json()
     print(f"AIGC 自检: {chk['score']}({chk['level']}) -> 改写后 {rw['score_after']['score']}({rw['score_after']['level']})")
 
-    # 6. 报告生成与下载
+    # 7. 报告生成与下载
     r = c.post(f"{BASE}/api/report/generate", json={
         "title": "端到端测试报告", "run_ids": [iris_run], "dataset_id": ds["id"],
         "author": {"school": "测试大学"}, "ai_draft": False})
@@ -126,7 +145,7 @@ def main():
     assert dl.status_code == 200 and len(dl.content) > 50000
     print("报告下载:", len(dl.content), "bytes")
 
-    # 7. 清理测试数据集
+    # 8. 清理测试数据集
     for did in (text_ds, img_ds):
         c.delete(f"{BASE}/api/datasets/{did}")
     print("\nALL PASSED")

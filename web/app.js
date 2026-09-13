@@ -52,6 +52,40 @@ function fmtNum(v) {
   return v.toPrecision(4);
 }
 
+function loadReportSel() {
+  try { const v = JSON.parse(localStorage.getItem("tf_report_sel") || "[]"); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+
+function saveReportSel() {
+  localStorage.setItem("tf_report_sel", JSON.stringify(state.reportSelected || []));
+}
+
+function loadCompareSel() {
+  try { const v = JSON.parse(localStorage.getItem("tf_compare_sel") || "[]"); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+
+function saveCompareSel() {
+  localStorage.setItem("tf_compare_sel", JSON.stringify(state.compareSel || []));
+}
+
+function tfBridge() {
+  return window.pywebview && window.pywebview.api ? window.pywebview.api : null;
+}
+
+const GROUPS = {
+  baseline: { label: "基线", cls: "baseline" },
+  improved: { label: "改进", cls: "improved" },
+  ablation: { label: "消融", cls: "ablation" },
+  custom: { label: "自定义", cls: "custom" },
+};
+
+function groupBadge(g) {
+  const d = GROUPS[g] || { label: g || "基线", cls: "custom" };
+  return `<span class="badge ${d.cls}">${esc(d.label)}</span>`;
+}
+
 /* 折线图（纯 SVG） */
 function lineChart(series, opts = {}) {
   const pts = series.flatMap((s) => s.points);
@@ -90,12 +124,13 @@ const C = { teal: "#0d6e63", orange: "#c2410c", ink: "#1d2023", gray: "#9aa1a6",
 
 const state = {
   health: null, config: null, datasets: [], builtin: [], runs: [], reports: [],
-  train: { datasetId: "", task: "", model: "", params: {}, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "" },
+  train: { datasetId: "", task: "", model: "", params: {}, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "", name: "", group: "baseline", note: "" },
   openRun: null, openDataset: null, pollTimer: null,
+  reportSelected: loadReportSel(), compareSel: loadCompareSel(),
 };
 
 /* ================= 路由 ================= */
-const ROUTES = { dashboard: pageDashboard, datasets: pageDatasets, train: pageTrain, runs: pageRuns, report: pageReport, ai: pageAI, guide: pageGuide };
+const ROUTES = { dashboard: pageDashboard, datasets: pageDatasets, train: pageTrain, runs: pageRuns, compare: pageCompare, report: pageReport, ai: pageAI, guide: pageGuide };
 
 function route() {
   const name = (location.hash || "#/dashboard").replace(/^#\//, "") || "dashboard";
@@ -374,11 +409,21 @@ async function pageTrain() {
       }).join("")}</div>
     </div>
     <div class="section"><h2>超参数</h2>
-      <div class="panel"><div class="form-grid" id="tr-params-form"></div>
-        <div class="row-flex mt14"><button class="btn accent" id="btn-launch" style="font-size:14px;padding:9px 26px">开始训练</button>
-        <span class="hint">提交后立即返回，可到「实验记录」看实时进度</span></div>
+      <div class="panel"><div class="form-grid" id="tr-params-form"></div></div>
+    </div>
+    <div class="section"><h2>实验命名与分组</h2>
+      <div class="panel">
+        <div class="form-grid">
+          <div class="form-row"><label>实验名称（可选）</label><input id="tr-name" maxlength="80" value="${esc(t.name || "")}" placeholder="如：基线：逻辑回归"></div>
+          <div class="form-row"><label>实验分组</label>
+            <select id="tr-group">${Object.entries(GROUPS).map(([k, v]) => `<option value="${k}" ${k === t.group ? "selected" : ""}>${esc(v.label)}</option>`).join("")}</select>
+          </div>
+          <div class="form-row"><label>备注（可选，最多 500 字）</label><input id="tr-note" maxlength="500" value="${esc(t.note || "")}" placeholder="如：固定种子 42，仅改 n_estimators"></div>
+        </div>
       </div>
-    </div>`;
+    </div>
+    <div class="row-flex mt14" style="margin-top:22px"><button class="btn accent" id="btn-launch" style="font-size:14px;padding:9px 26px">开始训练</button>
+    <span class="hint">提交后立即返回，可到「实验记录」看实时进度</span></div>`;
 
   const renderParams = () => {
     const spec = taskDef && taskDef.models[t.model];
@@ -401,6 +446,9 @@ async function pageTrain() {
   document.querySelectorAll("[data-p]").forEach((inp) => inp.onchange = () => { state.train.params[inp.dataset.p] = inp.value; });
   $("#tr-testsize").onchange = (e) => (state.train.testSize = parseFloat(e.target.value) || 0.2);
   $("#tr-seed").onchange = (e) => (state.train.seed = parseInt(e.target.value) || 42);
+  $("#tr-name").oninput = (e) => (state.train.name = e.target.value);
+  $("#tr-group").onchange = (e) => (state.train.group = e.target.value);
+  $("#tr-note").oninput = (e) => (state.train.note = e.target.value);
   const vs = $("#tr-valsize");
   if (vs) vs.onchange = (e) => (state.train.valSplit = parseFloat(e.target.value) || 0.2);
   $("#tr-split-hint").textContent = isImage
@@ -429,6 +477,7 @@ async function pageTrain() {
         params: state.train.params, target: state.train.target || null,
         text_column: state.train.textColumn || null, test_size: state.train.testSize,
         val_split: state.train.valSplit, random_state: state.train.seed,
+        name: state.train.name, group: state.train.group, note: state.train.note,
       };
       const r = await api("/api/runs", { method: "POST", body });
       toast(`实验已启动：${r.run_id}`, "success");
@@ -449,9 +498,11 @@ function metricSourceNote(s) {
 }
 
 function runsTable(runs) {
-  return `<table class="data"><thead><tr><th>实验 ID</th><th>数据集</th><th>模型</th><th>状态</th><th>主指标</th><th>时间</th></tr></thead>
+  return `<table class="data"><thead><tr><th>实验 ID</th><th>名称 / 分组</th><th>数据集</th><th>模型</th><th>状态</th><th>主指标</th><th>时间</th></tr></thead>
     <tbody>${runs.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}">
-      <td class="small muted">${esc(r.run_id)}</td><td>${esc(r.dataset_name || "-")}</td><td>${esc(r.model_label || r.model || "-")}</td>
+      <td class="small muted">${esc(r.run_id)}</td>
+      <td><div class="cell-main">${esc(r.name || r.model_label || r.model || r.run_id)}</div><div class="cell-sub mt4">${groupBadge(r.group)}</div></td>
+      <td>${esc(r.dataset_name || "-")}</td><td>${esc(r.model_label || r.model || "-")}</td>
       <td>${statusText(r.state)}</td>
       <td>${r.primary_metric ? `<b>${esc(r.primary_metric.name)}</b> = ${fmtNum(r.primary_metric.value)}` : "-"}</td>
       <td class="muted small">${esc(r.created_at || "")}</td></tr>`).join("")}</tbody></table>`;
@@ -503,15 +554,25 @@ async function openRun(id, silent = false) {
     box.innerHTML = `
       <div class="panel mt14">
         <div class="row-flex spread">
-          <div class="row-flex"><b>实验 ${esc(id)}</b>${statusText(d.state)}</div>
+          <div class="row-flex"><b>${esc(d.name || ("实验 " + id))}</b>${groupBadge(d.group)}${statusText(d.state)}</div>
           <div class="row-flex">
             ${running ? '<button class="btn danger small" id="btn-cancel">取消训练</button>' : ""}
+            <button class="btn small" id="btn-reuse">复用参数</button>
             <button class="btn small" id="btn-run-ai">AI 分析结果</button>
             <button class="btn danger small" id="btn-del">删除</button>
             <button class="btn small" id="btn-back">返回列表</button>
           </div>
         </div>
         ${d.error ? `<div class="mt8 small" style="color:var(--danger)">训练失败：${esc(d.error).slice(0, 300)}</div>` : ""}
+        <div class="meta-box mt14">
+          <div class="form-grid">
+            <div class="form-row"><label>实验名称</label><input id="meta-name" maxlength="80" value="${esc(d.name || "")}" placeholder="${esc(d.config.model_label || d.config.model || "实验名称")}"></div>
+            <div class="form-row"><label>实验分组</label>
+              <select id="meta-group">${Object.entries(GROUPS).map(([k, v]) => `<option value="${k}" ${k === d.group ? "selected" : ""}>${esc(v.label)}</option>`).join("")}</select></div>
+            <div class="form-row"><label>备注（可选）</label><input id="meta-note" maxlength="500" value="${esc(d.note || "")}"></div>
+            <div class="form-row"><label>保存</label><button class="btn small" id="btn-meta-save">保存实验信息</button></div>
+          </div>
+        </div>
         <div class="row-flex mt8 small muted">
           数据集 ${esc(d.config.dataset_name || "-")} ｜ 模型 ${esc(d.config.model_label || d.config.model || "-")}
           ｜ 参数 ${esc(fmtParams(d.config.params))}
@@ -532,6 +593,32 @@ async function openRun(id, silent = false) {
         <div class="log-box mt8" id="run-log">${esc(d.log_tail || "（暂无日志）")}</div>
       </div>`;
     $("#btn-back").onclick = () => { state.openRun = null; box.innerHTML = ""; };
+    $("#btn-reuse").onclick = () => {
+      const cfg = d.config || {};
+      state.train = {
+        datasetId: cfg.dataset_id || "", task: cfg.task || "", model: cfg.model || "",
+        params: { ...(cfg.params || {}) }, target: cfg.target || "", textColumn: cfg.text_column || "",
+        testSize: cfg.test_size ?? 0.2, valSplit: cfg.val_split ?? 0.2, seed: cfg.random_state ?? 42,
+        name: cfg.name || "", group: cfg.group || "baseline", note: cfg.note || "",
+      };
+      toast("参数已填入训练页", "success");
+      location.hash = "#/train";
+    };
+    $("#btn-meta-save").onclick = async () => {
+      const btn = $("#btn-meta-save");
+      btn.disabled = true;
+      try {
+        const r = await api(`/api/runs/${id}/meta`, { method: "PATCH", body: {
+          name: $("#meta-name").value, group: $("#meta-group").value, note: $("#meta-note").value,
+        }});
+        Object.assign(d, r.meta);
+        const row = state.runs.find((x) => x.run_id === id);
+        if (row) Object.assign(row, r.meta);
+        toast("实验信息已保存", "success");
+        await openRun(id, true);
+      } catch (e) { toast(e.message, "error"); }
+      if (btn) btn.disabled = false;
+    };
     $("#btn-run-ai").onclick = async (e) => {
       if (d.state !== "done") return toast("请等训练完成后再分析", "error");
       e.target.disabled = true; e.target.textContent = "分析中…";
@@ -554,10 +641,171 @@ async function openRun(id, silent = false) {
   schedulePoll();
 }
 
+/* ================= 实验对比 ================= */
+function defaultCompareSel(doneRuns) {
+  const counts = {};
+  for (const r of doneRuns) counts[r.group] = (counts[r.group] || 0) + 1;
+  const best = Object.keys(counts).sort((a, b) => (counts[b] || 0) - (counts[a] || 0))[0] || "baseline";
+  return doneRuns.filter((r) => r.group === best).slice(0, 4).map((r) => r.run_id);
+}
+
+async function pageCompare() {
+  const r = await api("/api/runs");
+  const done = (r.runs || []).filter((x) => x.state === "done");
+  state.runs = r.runs;
+  state.compareSel = state.compareSel.filter((rid) => done.some((x) => x.run_id === rid));
+  if (!state.compareSel.length) state.compareSel = defaultCompareSel(done);
+  saveCompareSel();
+
+  $("#page").innerHTML = `
+    ${pageHead("03B", "实验对比", "把已完成实验放到同一张表里做横向比较：主指标条形图、全指标表、热力矩阵，一处看清基线/改进/消融的差异。CSV 和 Markdown 可直接下载或复制进论文。")}
+    <div class="panel">
+      <b class="t">选择要对比的已完成实验（最多 20 个）</b>
+      <div class="compare-picker">${done.length ? done.map((x) => `
+        <label class="cmp-item"><input type="checkbox" class="cmp-run" value="${esc(x.run_id)}" ${state.compareSel.includes(x.run_id) ? "checked" : ""}>
+          <span class="cmp-name">${esc(x.name || x.model_label || x.model || x.run_id)}</span>${groupBadge(x.group)}
+          <span class="muted small">${esc(x.model_label || x.model || "")}</span>
+          <span class="muted small">${x.primary_metric ? `${esc(x.primary_metric.name)}=${fmtNum(x.primary_metric.value)}` : ""}</span></label>`).join("")
+        : '<div class="empty">还没有已完成实验。先到「模型训练」页完成几组实验，再回来对比。</div>'}</div>
+      <div class="row-flex mt14">
+        <button class="btn small" id="cmp-same">同组推荐</button>
+        <button class="btn small" id="cmp-clear">清空选择</button>
+        <button class="btn accent" id="cmp-build">生成对比</button>
+        <span class="hint">默认选中最近一组同分组的已完成实验；同组推荐会按基线→改进→消融补满一组。</span>
+      </div>
+    </div>
+    <div id="cmp-result"></div>`;
+
+  const syncSel = () => {
+    state.compareSel = [...document.querySelectorAll(".cmp-run:checked")].map((c) => c.value).slice(0, 20);
+    saveCompareSel();
+  };
+  document.querySelectorAll(".cmp-run").forEach((cb) => cb.onchange = syncSel);
+  $("#cmp-clear").onclick = () => {
+    state.compareSel = [];
+    saveCompareSel();
+    document.querySelectorAll(".cmp-run").forEach((c) => (c.checked = false));
+    $("#cmp-result").innerHTML = "";
+  };
+  $("#cmp-same").onclick = async () => {
+    if (!done.length) return;
+    const first = state.compareSel.find((rid) => done.some((x) => x.run_id === rid));
+    const anchor = done.find((x) => x.run_id === first) || done[0];
+    state.compareSel = done.filter((x) => x.group === anchor.group).slice(0, 20).map((x) => x.run_id);
+    saveCompareSel();
+    document.querySelectorAll(".cmp-run").forEach((c) => (c.checked = state.compareSel.includes(c.value)));
+    toast("已选择同组实验", "success");
+    $("#cmp-build").click();
+  };
+  $("#cmp-build").onclick = async () => {
+    syncSel();
+    if (!state.compareSel.length) return toast("请先选择至少一个已完成实验", "error");
+    const btn = $("#cmp-build");
+    btn.disabled = true; btn.textContent = "生成中…";
+    try {
+      const result = await api("/api/experiments/compare", { method: "POST", body: { run_ids: state.compareSel } });
+      renderCompare(result);
+      toast(`对比完成：${result.count} 个实验`, "success");
+    } catch (e) { toast(e.message, "error"); }
+    btn.disabled = false; btn.textContent = "生成对比";
+  };
+}
+
+function renderCompare(result) {
+  const box = $("#cmp-result");
+  if (!result || !result.count) {
+    box.innerHTML = '<div class="panel mt14 empty">没有可对比的已完成实验，请勾选左上方的实验后重新生成。</div>';
+    return;
+  }
+  const rows = result.metric_rows || [];
+  const cols = result.columns || [];
+  const primary = rows.find((x) => x.is_primary) || rows[0] || {};
+  const pvals = (primary.values || []).map((v) => (typeof v === "number" ? v : null));
+  const pmin = Math.min(...pvals.filter((v) => v !== null));
+  const pmax = Math.max(...pvals.filter((v) => v !== null));
+  const pspan = (pmax - pmin) || 1;
+  const barHtml = cols.map((c, i) => {
+    const v = pvals[i];
+    const h = v === null ? 0 : 14 + Math.round(((v - pmin) / pspan) * 86);
+    return `<div class="bar-col" title="${esc(c.label)}：${v === null ? "-" : fmtNum(v)}（${esc(c.group_label)}）">
+      <div class="bar-val">${v === null ? "-" : fmtNum(v)}</div>
+      <div class="bar-track"><div class="bar-fill ${esc(c.group)}" style="height:${h}%"></div></div>
+      <div class="bar-label" title="${esc(c.label)}">${esc((c.label || c.model_label || "").slice(0, 10))}</div>
+      <div class="bar-group">${groupBadge(c.group)}</div></div>`;
+  }).join("");
+
+  function heatStyle(mr, v) {
+    if (typeof v !== "number") return "";
+    const nums = (mr.values || []).filter((x) => typeof x === "number");
+    const lo = Math.min(...nums), hi = Math.max(...nums);
+    const span = (hi - lo) || 1;
+    const p = (v - lo) / span;
+    const good = mr.higher_is_better ? p : 1 - p;
+    const alpha = 0.04 + good * 0.42;
+    return `style="background:rgba(13,110,99,${alpha.toFixed(3)})"`;
+  }
+  const bestCell = (mr, v) => {
+    if (typeof v !== "number") return '<td class="muted">-</td>';
+    const nums = (mr.values || []).filter((x) => typeof x === "number");
+    const best = mr.higher_is_better ? Math.max(...nums) : Math.min(...nums);
+    return `<td class="${v === best ? "best" : ""}" ${heatStyle(mr, v)}>${fmtNum(v)}</td>`;
+  };
+
+  box.innerHTML = `
+    <div class="panel mt14">
+      <div class="row-flex spread">
+        <b>主指标：${esc(primary.label || "主指标")}</b>
+        <div class="row-flex">
+          <button class="btn small" id="cmp-csv">下载 CSV</button>
+          <button class="btn small" id="cmp-md">复制 Markdown</button>
+        </div>
+      </div>
+      <div class="bar-chart mt14">${barHtml || '<div class="empty">暂无可绘制的数值</div>'}</div>
+    </div>
+    <div class="section"><h2>指标对比表（最优值加粗高亮）</h2>
+      <div class="panel table-scroll">
+        <table class="data compare-table"><thead><tr><th>指标</th>${cols.map((c) => `<th>${esc(c.label)}<div class="mt4">${groupBadge(c.group)}</div></th>`).join("")}</tr></thead>
+        <tbody>${rows.map((mr) => `<tr><td class="metric-cell">${esc(mr.label)}${mr.higher_is_better ? "" : '<span class="muted small">（越低越好）</span>'}</td>${(mr.values || []).map((v) => bestCell(mr, v)).join("")}</tr>`).join("")}</tbody></table>
+      </div>
+    </div>
+    <div class="section"><h2>热力矩阵</h2>
+      <div class="panel table-scroll">
+        <div class="heat-grid">
+          <div class="heat-col heat-label"><div class="heat-head">指标</div>${rows.map((mr) => `<div class="heat-cell" title="${esc(mr.label)}">${esc(mr.label)}</div>`).join("")}</div>
+          ${cols.map((c, ci) => `<div class="heat-col"><div class="heat-head">${esc(c.label)}${groupBadge(c.group)}</div>${rows.map((mr) => {
+            const v = (mr.values || [])[ci];
+            return `<div class="heat-cell" ${heatStyle(mr, v)} title="${esc(c.label)} · ${esc(mr.label)} = ${typeof v === "number" ? fmtNum(v) : "-"}">${typeof v === "number" ? fmtNum(v) : "-"}</div>`;
+          }).join("")}</div>`).join("")}
+        </div>
+      </div>
+    </div>
+    <div class="hint mt8">表头按 基线→改进→消融→自定义 排序；每行最优值已高亮，热力颜色代表该行内的相对高低。</div>`;
+
+  $("#cmp-csv").onclick = () => {
+    const blob = new Blob(["\ufeff" + (result.csv || "")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ThesisForge-实验对比.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    toast("CSV 已下载", "success");
+  };
+  $("#cmp-md").onclick = async () => {
+    const text = result.markdown || "";
+    try { await navigator.clipboard.writeText(text); toast("Markdown 已复制", "success"); }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); ta.remove(); toast("Markdown 已复制", "success");
+    }
+  };
+}
+
 /* ================= 报告工坊 ================= */
 async function pageReport() {
   const [runsR, dsR, repR] = await Promise.all([api("/api/runs"), api("/api/datasets"), api("/api/report/list")]);
   const doneRuns = runsR.runs.filter((r) => r.state === "done");
+  state.reportSelected = state.reportSelected.filter((rid) => doneRuns.some((r) => r.run_id === rid));
+  saveReportSel();
   state.datasets = dsR.datasets; state.reports = repR.reports;
   $("#page").innerHTML = `
     ${pageHead("04", "报告工坊", "勾选实验与数据集，按毕业论文的章节结构生成 Word 初稿：目录、中英文摘要、绪论、相关技术、数据与预处理、实验与结果分析（三线表 + 自动插图）、总结、参考文献（GB/T 7714）、致谢。")}
@@ -579,8 +827,9 @@ async function pageReport() {
       <div class="panel">
         <b class="t">写入第四章的实验（可多选）</b>
         <div class="mt8" style="max-height:180px;overflow:auto">${doneRuns.length ? doneRuns.map((r) => `
-          <label class="row-flex small" style="padding:6px 2px"><input type="checkbox" class="rp-run" value="${esc(r.run_id)}" style="width:auto">
-          ${esc(r.model_label || r.model)}（${r.primary_metric ? `${r.primary_metric.name}=${fmtNum(r.primary_metric.value)}` : r.run_id}）</label>`).join("") : '<div class="empty">暂无已完成实验，先去训练一个模型。</div>'}</div>
+          <label class="row-flex small report-run" style="padding:6px 2px"><input type="checkbox" class="rp-run" value="${esc(r.run_id)}" style="width:auto" ${state.reportSelected.includes(r.run_id) ? "checked" : ""}>
+          <span>${esc(r.name || r.model_label || r.model || r.run_id)}</span>${groupBadge(r.group)}
+          <span class="muted">${r.primary_metric ? `${esc(r.primary_metric.name)}=${fmtNum(r.primary_metric.value)}` : r.run_id}</span></label>`).join("") : '<div class="empty">暂无已完成实验，先去训练一个模型。</div>'}</div>
         <label class="row-flex mt14 small"><input type="checkbox" id="rp-ai" style="width:auto" ${state.config && state.config.configured ? "checked" : "disabled"}>
           用 AI 起草各章节正文（自动去 AI 味）${state.config && !state.config.configured ? "——需先配置 AI 接口" : ""}</label>
         <button class="btn accent mt14" id="btn-report">生成论文初稿（.docx）</button>
@@ -621,8 +870,13 @@ async function pageReport() {
         <td class="muted small">${(r.size / 1024).toFixed(0)} KB</td><td class="muted small">${esc(r.created_at)}</td></tr>`).join("")}
       </tbody></table>` : '<div class="empty">还没有导出过报告。</div>'}</div>
     </div>`;
+  document.querySelectorAll(".rp-run").forEach((cb) => cb.onchange = () => {
+    state.reportSelected = [...document.querySelectorAll(".rp-run:checked")].map((c) => c.value);
+    saveReportSel();
+  });
   $("#btn-report").onclick = async () => {
     const ids = [...document.querySelectorAll(".rp-run:checked")].map((c) => c.value);
+    if (!ids.length) return toast("请至少勾选一个已完成实验写入第四章", "error");
     const btn = $("#btn-report");
     btn.disabled = true; btn.textContent = "生成中（AI 起草约需 1-2 分钟）…";
     try {
@@ -754,6 +1008,19 @@ async function pageGuide() {
           <div class="row"><span class="k">产出</span><span class="v">${esc(output)}</span></div>
           <div class="row"><span class="k">工具衔接</span><span class="v">${esc(tool)}</span></div>
         </div>`).join("")}
+    </div>
+    <div class="section"><h2>一套可以直接照抄的实验方案模板</h2>
+      <div class="panel table-scroll">
+        <table class="data"><thead><tr><th>编号</th><th>实验名称（写入分组）</th><th>对比要回答的问题</th><th>做法</th></tr></thead>
+        <tbody>
+          <tr><td>A1</td><td>基线-逻辑回归（基线）</td><td>最简单、可复现的下限是多少</td><td>默认参数先跑通，固定随机种子</td></tr>
+          <tr><td>A2</td><td>改进-随机森林（改进）</td><td>更强的非线性模型能否超过基线</td><td>固定种子，调树数量/最大深度，只改关键参数</td></tr>
+          <tr><td>A3</td><td>改进-梯度提升树（改进）</td><td>集成与逐棵纠错是否再提升</td><td>与 A2 同一数据划分与评价口径</td></tr>
+          <tr><td>A4</td><td>消融-关闭某一改进项（消融）</td><td>改进点是否真的有用</td><td>在最优配置上单独关掉一个改进项，其余不动</td></tr>
+          <tr><td>A5</td><td>自定义-重复实验或外部方案（自定义）</td><td>稳定性与扩展对比</td><td>同一配置重复 3-5 次记录均值±标准差</td></tr>
+        </tbody></table>
+        <div class="hint mt14">建议至少完成 A1、A2、A3、A4。训练前在训练页填好实验名称与分组，报告会自动按组排序，对比页可直接生成论文用的三线表。</div>
+      </div>
     </div>`;
 }
 
@@ -777,4 +1044,11 @@ function updateSidebar() {
   route();
   if (!localStorage.getItem("tf_onboarded")) setTimeout(() => showTour(0), 400);
   $("#btn-tour").onclick = () => showTour(0);
+  $("#btn-browser").onclick = async () => {
+    const bridge = tfBridge();
+    if (bridge && bridge.open_external_browser) {
+      try { await bridge.open_external_browser(); toast("已用系统浏览器打开", "success"); return; } catch { /* fallthrough */ }
+    }
+    window.open(location.href, "_blank");
+  };
 })();
