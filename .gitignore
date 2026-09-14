@@ -16,4 +16,5 @@ Thumbs.db
 server.log
 .playwright-mcp/
 scripts/.thesis_demo_state.json
+scripts/.water_demo_state.json
 scripts/_wizard_*.png

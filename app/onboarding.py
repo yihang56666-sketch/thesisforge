@@ -21,9 +21,60 @@ STEP_NAMES = {
 }
 VALID_STATES = {"todo", "doing", "done", "skipped"}
 
+STEP_TEMPLATES = {
+    "3": "data_prep",
+    "4": "network",
+    "5": "training",
+}
+
+TEMPLATE_KEYS = {
+    "data_prep": {"missing", "impute", "scale", "encode", "augment", "split_first",
+                  "test_size", "val_split", "seed"},
+    "network": {"task", "arch", "params"},
+    "training": {"optimizer", "lr", "batch_size", "epochs", "scheduler",
+                 "weight_decay", "early_stop_patience", "grad_clip", "device"},
+}
+
 
 def _blank_step() -> dict:
-    return {"state": "todo", "completed": False, "saved_at": None}
+    return {"state": "todo", "completed": False, "saved_at": None, "template": None}
+
+
+def default_template(template: str | None) -> dict | None:
+    """向导步骤配置模板：只在步骤 3/4/5 使用，旧项目自动补默认推荐值。"""
+    if template == "data_prep":
+        return {
+            "missing": "impute", "impute": "median", "scale": "standard",
+            "encode": "onehot", "augment": "flip_rotate", "split_first": True,
+            "test_size": 0.2, "val_split": 0.2, "seed": 42,
+        }
+    if template == "network":
+        return {
+            "task": "tabular_classification",
+            "arch": "mlp",
+            "params": {},
+        }
+    if template == "training":
+        return {
+            "optimizer": "adam", "lr": 0.001, "batch_size": 32, "epochs": 15,
+            "scheduler": "cosine", "weight_decay": 0.0,
+            "early_stop_patience": 0, "grad_clip": 0.0, "device": "auto",
+        }
+    return None
+
+
+def _clean_template(template: str | None, value) -> dict | None:
+    keys = TEMPLATE_KEYS.get(template or "")
+    if not keys:
+        return None
+    base = default_template(template) or {}
+    if isinstance(value, dict):
+        base.update({k: value[k] for k in keys if k in value})
+    return base
+
+
+def _step_template_name(key: str) -> str | None:
+    return STEP_TEMPLATES.get(str(key))
 
 
 def default_progress() -> dict:
@@ -46,10 +97,12 @@ def load_progress() -> dict:
         for key in STEP_NAMES:
             step = raw.get("steps", {}).get(key, {})
             if isinstance(step, dict) and step.get("state") in VALID_STATES:
+                template_name = _step_template_name(key) or step.get("template")
                 data["steps"][key] = {
                     "state": step.get("state", "todo"),
                     "completed": bool(step.get("completed", False)),
                     "saved_at": step.get("saved_at"),
+                    "template": _clean_template(template_name, step.get("template")),
                 }
         if isinstance(raw.get("project"), dict):
             data["project"].update({k: str(v) for k, v in raw["project"].items()
@@ -63,11 +116,17 @@ def save_progress(data: dict) -> dict:
     clean = default_progress()
     clean["project"].update({k: str(v) for k, v in data.get("project", {}).items()
                              if k in clean["project"]})
+    existing = load_progress()
     for key, step in data.get("steps", {}).items():
         if key in STEP_NAMES and isinstance(step, dict) and step.get("state") in VALID_STATES:
+            template_name = _step_template_name(key) or step.get("template")
+            template_value = step.get("template")
+            if template_name in TEMPLATE_KEYS and template_value is None:
+                template_value = existing["steps"][key].get("template")
             clean["steps"][key] = {"state": step["state"],
                                    "completed": bool(step.get("completed", False)),
-                                   "saved_at": step.get("saved_at")}
+                                   "saved_at": step.get("saved_at"),
+                                   "template": _clean_template(template_name, template_value)}
     if isinstance(data.get("active_step"), int) and 1 <= data["active_step"] <= 10:
         clean["active_step"] = data["active_step"]
     clean["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -85,6 +144,7 @@ def update_step(step_key: str | int, state: str) -> bool:
         "state": state,
         "completed": state == "done",
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S") if state in ("done", "skipped") else None,
+        "template": data["steps"][key].get("template") if key in ("3", "4", "5") else None,
     }
     save_progress(data)
     return True

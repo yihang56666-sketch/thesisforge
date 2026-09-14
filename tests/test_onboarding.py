@@ -62,6 +62,45 @@ def test_project_completion_detection(tmp_path, monkeypatch):
     assert onboarding.looks_completed_manually(onboarding.load_progress()) is True
 
 
+def test_old_project_gets_recommended_templates(tmp_path, monkeypatch):
+    p = _tmp_project(tmp_path, monkeypatch)
+    p.write_text(json.dumps({
+        "version": 1,
+        "project": {"title": "旧项目"},
+        "steps": {str(i): {"state": "todo", "completed": False, "saved_at": None} for i in range(1, 11)},
+        "active_step": 3,
+    }), encoding="utf-8")
+    data = onboarding.load_progress()
+    assert data["steps"]["3"]["template"]["missing"] == "impute"
+    assert data["steps"]["4"]["template"]["task"] == "tabular_classification"
+    assert data["steps"]["5"]["template"]["optimizer"] == "adam"
+    assert data["steps"]["6"]["template"] is None
+
+
+def test_template_persists_and_cleans_unknown_fields(tmp_path, monkeypatch):
+    p = _tmp_project(tmp_path, monkeypatch)
+    data = onboarding.load_progress()
+    data["steps"]["3"]["template"] = {
+        "missing": "drop", "impute": "median", "scale": "robust",
+        "encode": "label", "augment": "none", "split_first": False,
+        "test_size": 0.25, "val_split": 0.15, "seed": 7,
+        "hack": "ignored",
+    }
+    data["steps"]["4"]["template"] = {"task": "image_classification", "arch": "cnn", "params": {"depth": 2}, "hack": "x"}
+    onboarding.save_progress(data)
+    reloaded = onboarding.load_progress()
+    step3 = reloaded["steps"]["3"]["template"]
+    assert step3["missing"] == "drop"
+    assert step3["scale"] == "robust"
+    assert step3["test_size"] == 0.25
+    assert "hack" not in step3
+    step4 = reloaded["steps"]["4"]["template"]
+    assert step4["task"] == "image_classification"
+    assert step4["arch"] == "cnn"
+    assert step4["params"]["depth"] == 2
+    assert "hack" not in step4
+
+
 def test_wizard_api_roundtrip(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
     from app import main

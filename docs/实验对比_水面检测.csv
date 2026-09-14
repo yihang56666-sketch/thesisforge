@@ -1,0 +1,10 @@
+指标,水面检测基线-CNN-SGD,水面检测改进-CNN-AdamW余弦
+主指标：test_accuracy,1,1
+准确率,1,1
+best_val_accuracy,1,1
+f1_macro,1,1
+f1_weighted,1,1
+precision_macro,1,1
+recall_macro,1,1
+测试损失,0.67199,0.61531
+ROC AUC,1,1

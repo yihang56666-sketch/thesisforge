@@ -412,6 +412,21 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 .wz-check-list { display: grid; gap: 8px; margin-top: 4px; }
 .wz-check { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.7; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fbfbf9; }
 .wz-check i { flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-style: normal; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.wizard-kicker-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wz-ds-current { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; background: #fbfbf9; padding: 10px 12px; margin-bottom: 16px; }
+.wz-ds-current .name { font-weight: 600; font-size: 13px; }
+.wz-ds-current .desc { font-size: 11.5px; color: var(--muted); }
+.wz-ds-current.warn { border-color: #d9b65e; background: #fdf9ee; }
+.wz-note { font-size: 12px; color: var(--muted); line-height: 1.7; background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 4px; padding: 9px 12px; margin: 4px 0 14px; }
+.model-item .m-tag { display: inline-block; margin-top: 7px; font-size: 10.5px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 1px 6px; }
+.wz-estimate { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: #fbfbf9; }
+.wz-estimate .t { font-weight: 700; font-size: 13px; }
+.wz-estimate.loading { color: var(--muted); font-size: 12px; }
+.wz-estimate.ok { border-color: #b7ccb8; background: #f4faf4; }
+.wz-estimate.warn { border-color: #e0b25a; background: #fdf6e9; }
+.wz-env-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
+.wz-env-grid .kv b { font-size: 15px; }
+.wz-write-out { border-left: 3px solid var(--accent); background: #fbfdfc; border-radius: 4px; padding: 12px 16px; }
 
 @media (max-width: 900px) {
   .wizard-page { padding: 20px 14px 70px; }

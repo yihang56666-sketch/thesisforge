@@ -154,13 +154,12 @@ def main() -> int:
         if task == "text_classification":
             pipe = est_for(model_key, params)
         else:
+            from app.prep import build_tabular_transformer
+
             num_cols = list(X_raw.select_dtypes(include=[np.number]).columns)
             cat_cols = [c for c in X_raw.columns if c not in num_cols]
             log(f"数值特征 {len(num_cols)} 个，类别特征 {len(cat_cols)} 个")
-            pre = ColumnTransformer([
-                ("num", Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())]), num_cols),
-                ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")), ("oh", OneHotEncoder(handle_unknown="ignore"))]), cat_cols),
-            ])
+            pre = build_tabular_transformer(cfg.get("prep") or {}, num_cols, cat_cols)
             pipe = Pipeline([("pre", pre), ("clf", est_for(model_key, params))])
 
         # ---------------- 交叉验证
@@ -314,8 +313,17 @@ def main() -> int:
     except Exception:
         err = traceback.format_exc()
         log("训练失败:\n" + err)
+        low = err.lower()
+        if "out of memory" in low or "cuda oom" in low or "cuda out of memory" in low:
+            kind, hint = "oom", "显存/内存不足。建议减小 batch_size、image_size 或 hidden_sizes，降低网络层数，或改用 CPU 训练。"
+        elif "no space left" in low or "errno 28" in low or ("disk" in low and "space" in low):
+            kind, hint = "disk", "磁盘空间不足。请清理实验输出目录所在磁盘，删除不再需要的实验或临时文件后重试。"
+        else:
+            kind, hint = "error", "训练异常，具体原因见下方错误信息与运行日志（data/logs/launch.log）。"
         (run_dir / "status.json").write_text(
-            json.dumps({"state": "failed", "error": err[-1500:], "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False),
+            json.dumps({"state": "failed", "error": err[-1500:], "failure_kind": kind,
+                        "failure_hint": hint, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                       ensure_ascii=False),
             encoding="utf-8",
         )
         return 1

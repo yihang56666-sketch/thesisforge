@@ -11,9 +11,9 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 OWNER = "yihang56666-sketch"
 REPO = "thesisforge"
-EXE = ROOT / "dist" / "ThesisForge-v0.4.0-win-x64.exe"
-ZIP = ROOT / "dist" / "ThesisForge-v0.4.0-win64-offline.zip"
-NOTES = ROOT / "packaging" / "release-notes-v0.4.0.md"
+EXE = ROOT / "dist" / "ThesisForge-v0.4.1-win-x64.exe"
+ZIP = ROOT / "dist" / "ThesisForge-v0.4.1-win64-offline.zip"
+NOTES = ROOT / "packaging" / "release-notes-v0.4.1.md"
 
 
 def get_token() -> str:
@@ -68,15 +68,15 @@ def main():
     # 3. 创建 Release（已存在则复用）
     body = NOTES.read_text(encoding="utf-8")
     r = api.post(f"/repos/{full}/releases", json={
-        "tag_name": "v0.4.0",
+        "tag_name": "v0.4.1",
         "target_commitish": "main",
-        "name": "毕设工坊 ThesisForge v0.4.0（Windows 独立 EXE + 离线整合包）",
+        "name": "毕设工坊 ThesisForge v0.4.1（Windows 独立 EXE + 离线整合包）",
         "body": body,
     })
     if r.status_code in (200, 201):
         print("Release 已创建:", r.json().get("html_url"))
     elif r.status_code == 422 and "already_exists" in r.text:
-        r = api.get(f"/repos/{full}/releases/tags/v0.4.0")
+        r = api.get(f"/repos/{full}/releases/tags/v0.4.1")
         print("Release 已存在，复用")
     else:
         print("建 Release 失败:", r.status_code, r.text[:300])

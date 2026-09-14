@@ -8,6 +8,12 @@ from pathlib import Path
 
 from app import datasets_hub
 
+try:
+    from PIL import Image  # noqa: F401
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 
 class DatasetDirTest(unittest.TestCase):
     def test_valid_id_accepted(self):
@@ -58,6 +64,31 @@ class ZipSlipTest(unittest.TestCase):
         dest = _isolate.scratch("zip-slip-absolute")
         datasets_hub._safe_extract_zip(io.BytesIO(buf.getvalue()), dest)
         self.assertEqual(list(dest.rglob("*")), [])
+
+
+class BuiltinDemoTest(unittest.TestCase):
+    def test_builtin_text_demo_loads(self):
+        meta = datasets_hub.load_builtin("pseudo_text")
+        self.assertEqual(meta["type"], "tabular")
+        self.assertEqual(meta["task"], "text_classification")
+        self.assertEqual(meta["n_rows"], 320)
+        self.assertEqual(meta["text_column"], "text")
+        self.assertEqual(meta["target"], "label")
+        self.assertIn("duplicates", meta["stats"])
+
+    @unittest.skipUnless(HAS_PIL, "需要 Pillow 才能生成内置图像示例")
+    def test_builtin_image_demo_loads(self):
+        meta = datasets_hub.load_builtin("pseudo_image")
+        self.assertEqual(meta["type"], "image")
+        self.assertEqual(meta["task"], "image_classification")
+        self.assertEqual(meta["n_classes"], 5)
+        self.assertEqual(meta["n_images"], 175)
+
+    def test_eda_counts_duplicates(self):
+        csv_bytes = "a,b,target\n1,2,x\n1,2,x\n3,4,y\n5,6,y\n5,6,y\n".encode("utf-8")
+        meta = datasets_hub.import_bytes("dup.csv", csv_bytes)
+        self.assertEqual(meta["stats"]["duplicates"], 2)
+        self.assertAlmostEqual(meta["stats"]["duplicate_rate"], 0.4)
 
 
 if __name__ == "__main__":

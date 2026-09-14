@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, report, runner
+from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, prep, report, runner
 from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
     ensure_dirs, load_runtime_config, resolve_api_key, save_runtime_config,
@@ -105,6 +105,243 @@ def health():
     except Exception:
         pass
     return info
+
+
+# ================================================================ 向导辅助
+class NetworkEstimateReq(BaseModel):
+    task: str
+    model: str
+    params: dict = {}
+    dataset_id: str | None = None
+
+
+def _estimate_dims(task: str, dataset_id: str | None) -> dict:
+    """从数据集元数据推断网络构建需要的维度；没有数据集时用稳妥的默认值。"""
+    dims: dict = {}
+    if not dataset_id:
+        if task == "image_classification":
+            dims.update({"num_classes": 5, "image_size": 64})
+        elif task == "text_classification":
+            dims.update({"num_classes": 2, "num_tokens": 5000, "max_seq_len": 128})
+        else:
+            dims.update({"num_classes": 2, "num_features": 16})
+        return dims
+    try:
+        meta = datasets_hub.load_meta(dataset_id)
+    except FileNotFoundError:
+        return _estimate_dims(task, None)
+    if task == "image_classification":
+        dims["num_classes"] = int(meta.get("n_classes") or len(meta.get("classes") or []) or 5)
+        dims["image_size"] = 64
+    elif task == "text_classification":
+        dims["num_classes"] = max(2, int(meta.get("n_classes") or 2))
+        dims["num_tokens"] = 5000
+        dims["max_seq_len"] = 128
+    else:
+        stats = meta.get("stats") or {}
+        cols = meta.get("columns") or []
+        target = meta.get("target")
+        features = [c for c in cols if c != target]
+        dims["num_features"] = max(1, len(features) or int(stats.get("n_cols") or 16) - 1)
+        if meta.get("task") == "tabular_regression" or (stats and not stats.get("class_counts")):
+            dims["num_classes"] = 2
+        else:
+            dims["num_classes"] = max(2, int(stats.get("n_classes") or meta.get("n_classes") or 2))
+    return dims
+
+
+def _human_params(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f} M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f} K"
+    return str(n)
+
+
+@app.post("/api/networks/estimate")
+def estimate_network(req: NetworkEstimateReq):
+    spec = catalog.get_model_spec(req.task, req.model)
+    if not spec:
+        raise HTTPException(400, "未知任务或模型")
+    params = catalog.sanitize_params(spec, req.params)
+    dims = _estimate_dims(req.task, req.dataset_id)
+    if req.task == "image_classification":
+        dims["image_size"] = int(params.get("image_size") or 64)
+    try:
+        has_torch = importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        has_torch = False
+    if spec.get("engine") != "torch":
+        return {
+            "ok": True,
+            "engine": "sklearn",
+            "params_count": None,
+            "params_display": "无（非神经网络）",
+            "recommended_epochs": 1,
+            "speed": "极快（传统机器学习）",
+            "device_friendly": True,
+            "torch_available": has_torch,
+            "warnings": [],
+        }
+    if not has_torch:
+        return {
+            "ok": True,
+            "engine": "torch",
+            "params_count": None,
+            "params_display": "需 PyTorch",
+            "recommended_epochs": None,
+            "speed": "不可训练（缺依赖）",
+            "device_friendly": False,
+            "torch_available": False,
+            "warnings": ["当前环境未检测到 PyTorch。点击上方“环境自检”能看到安装指引；也可先用传统机器学习模型跑基线。"],
+        }
+    try:
+        from .networks import build_model, count_parameters
+
+        net = build_model(req.task, req.model, params, **dims)
+        n_params = int(count_parameters(net))
+        del net
+    except Exception as e:
+        return {
+            "ok": False,
+            "engine": "torch",
+            "params_count": None,
+            "params_display": "估算失败",
+            "recommended_epochs": None,
+            "speed": "—",
+            "device_friendly": False,
+            "torch_available": True,
+            "warnings": [f"网络构建失败：{e}（请检查参数是否合理）"],
+        }
+    epochs = int(params.get("epochs") or 15)
+    recommended = min(max(epochs, 5), 60) if n_params > 2_000_000 else max(5, epochs)
+    if n_params >= 10_000_000:
+        speed, friendly = "较慢（大模型，普通 CPU 建议先减小规模）", "CPU 紧张"
+    elif n_params >= 1_000_000:
+        speed, friendly = "中等（小尺寸）", "CPU/小显存可用"
+    else:
+        speed, friendly = "快（轻量）", "普通电脑友好"
+    return {
+        "ok": True,
+        "engine": "torch",
+        "params_count": n_params,
+        "params_display": _human_params(n_params),
+        "recommended_epochs": recommended,
+        "speed": speed,
+        "device_friendly": friendly,
+        "torch_available": True,
+        "warnings": [],
+    }
+
+
+@app.get("/api/environment/check")
+def environment_check():
+    info = {"ok": True, "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "torch": None, "torch_available": False, "torchvision": None,
+            "sklearn": None, "device": "未检测", "gpu_name": None,
+            "cuda_available": False, "memory_gb": None, "warnings": []}
+    try:
+        import sklearn
+
+        info["sklearn"] = sklearn.__version__
+    except Exception:
+        info["warnings"].append("未检测到 scikit-learn，表格/文本传统模型无法训练")
+    try:
+        if importlib.util.find_spec("torch") is None:
+            info["warnings"].append("未检测到 PyTorch，神经网络训练不可用。请安装图像训练-CPU/GPU 离线包后重试，或先用传统模型。")
+        else:
+            import torch
+
+            info["torch"] = torch.__version__
+            info["torch_available"] = True
+            info["cuda_available"] = bool(torch.cuda.is_available())
+            info["device"] = "GPU" if torch.cuda.is_available() else "CPU"
+            if torch.cuda.is_available():
+                info["gpu_name"] = torch.cuda.get_device_name(0)
+                try:
+                    info["memory_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
+                except Exception:
+                    pass
+            else:
+                try:
+                    info["memory_gb"] = round(_system_ram_gb(), 1)
+                except Exception:
+                    pass
+                info["warnings"].append("当前只能使用 CPU 训练：小网络可用，ResNet 等大网络请降低 image_size 与批大小")
+    except Exception as e:
+        info["warnings"].append(f"PyTorch 检测异常：{e}")
+    try:
+        import torchvision
+
+        info["torchvision"] = torchvision.__version__
+    except Exception:
+        if info["torch_available"]:
+            info["warnings"].append("未检测到 torchvision，ResNet18 无法构建；CNN 不受影响")
+    return info
+
+
+def _system_ram_gb() -> float:
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            m = _MEMORYSTATUSEX()
+            m.dwLength = ctypes.sizeof(m)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return m.ullTotalPhys / 1024**3
+        except Exception:
+            pass
+    try:
+        import psutil
+
+        return psutil.virtual_memory().total / 1024**3
+    except Exception:
+        return 0.0
+
+
+WRITING_SNIPPETS: dict[str, str] = {
+    "1": "本章说明研究背景与选题动机：先交代任务类型与数据形式，再写本文要解决的三个具体问题，最后概述研究对象。",
+    "2": "数据与方法部分应写明数据来源、样本量与特征/类别概况；如使用内置示例数据，需注明为公开/合成数据并说明类别构成。",
+    "3": "写数据处理流程时按“数据清洗→划分→预处理拟合”的顺序描述，明确随机种子、训练/验证/测试比例，并强调测试集只在最终评估时使用一次。",
+    "4": "网络设计部分先给出任务与输入输出维度，再描述网络结构（层数、通道/隐藏单元、激活、Dropout），然后给出参数量与设备开销，说明选该结构的理由。",
+    "5": "训练策略部分列出优化器、学习率、批大小、轮次、学习率调度、权重衰减、早停与梯度裁剪的具体取值，并解释每项选择的依据。",
+    "6": "实验过程中记录训练损失/验证指标曲线，说明是否触发早停、最佳模型对应轮次，以及训练耗时和设备环境。",
+    "7": "评估章节应同时报告测试集准确率/F1 等指标与混淆矩阵、ROC 曲线，并按类别分析错分样本，给出误差来源。",
+    "8": "消融实验逐项移除改进组件，说明每个组件对主指标的贡献；建议至少包含 1 组基线、1 组完整改进和 2-3 组消融。",
+    "9": "对比章节把基线、改进与消融实验放进同一张表，统一评价口径并突出最优值；若做了重复实验，报告均值±标准差。",
+    "10": "结论章节总结本文方法相对基线的提升，说明适用范围与局限，并结合消融结果给出后续改进方向。",
+}
+
+
+@app.get("/api/writing/snippet")
+def writing_snippet(step: str = "1"):
+    step = str(step)
+    if step not in WRITING_SNIPPETS:
+        raise HTTPException(404, "未知向导步骤")
+    data = onboarding.load_progress()
+    project = data.get("project") or {}
+    template = (data.get("steps") or {}).get(step, {}).get("template")
+    ctx = []
+    if project.get("title"):
+        ctx.append(f"题目：{project['title']}")
+    if project.get("direction"):
+        ctx.append(f"方向：{project['direction']}")
+    if step == "4" and isinstance(template, dict):
+        ctx.append(f"任务：{template.get('task')}")
+        ctx.append(f"架构：{template.get('arch')}")
+    if step == "5" and isinstance(template, dict):
+        ctx.append(f"优化器：{template.get('optimizer')}，学习率 {template.get('lr')}，轮次 {template.get('epochs')}")
+    text = WRITING_SNIPPETS[step]
+    if ctx:
+        text += "\n\n当前设置：\n" + "\n".join("- " + c for c in ctx)
+    return {"ok": True, "step": step, "text": text}
 
 
 @app.get("/api/wizard")
@@ -291,6 +528,7 @@ class CreateRunReq(BaseModel):
     task: str
     model: str
     params: dict = {}
+    prep: dict | None = None
     target: str | None = None
     text_column: str | None = None
     test_size: float = 0.2
@@ -363,6 +601,7 @@ def create_run(req: CreateRunReq):
         "model": req.model,
         "model_label": spec["label"],
         "params": clean_params,
+        "prep": prep.clean_prep(req.prep),
         "target": target,
         "text_column": req.text_column,
         "test_size": min(max(float(req.test_size), 0.05), 0.5),

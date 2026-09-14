@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import shutil
 import sys
 import time
 import traceback
@@ -69,6 +70,48 @@ def _json_safe(obj):
         v = float(obj)
         return None if not np.isfinite(v) else v
     return obj
+
+
+def _demo_value(v):
+    """把 numpy/pandas 标量转成可安全写 JSON 的 Python 标量。"""
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        return float(v)
+    if isinstance(v, (np.bool_,)):
+        return bool(v)
+    if isinstance(v, (np.ndarray, list, tuple)):
+        return [_demo_value(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _demo_value(x) for k, x in v.items()}
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return v
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+def _classify_failure(err_text: str) -> dict:
+    """把训练异常粗略分级，给新手一句可操作的解释而不是只甩 traceback。"""
+    low = (err_text or "").lower()
+    if "out of memory" in low or "cuda oom" in low or "cuda out of memory" in low:
+        return {
+            "kind": "oom",
+            "hint": "显存/内存不足。建议减小 batch_size、image_size 或 hidden_sizes，降低网络层数，"
+                    "或改用 CPU 训练；同时关闭其他占用显存的程序后再试。",
+        }
+    if "no space left" in low or "errno 28" in low or ("disk" in low and "space" in low):
+        return {
+            "kind": "disk",
+            "hint": "磁盘空间不足。请清理实验输出目录所在磁盘，删除不再需要的实验或临时文件后重试。",
+        }
+    return {
+        "kind": "error",
+        "hint": "训练异常，具体原因见下方错误信息与运行日志（data/logs/launch.log）。",
+    }
 
 
 def _log(msg: str) -> None:
@@ -242,26 +285,17 @@ def _load_tabular(config: dict, st: dict, device, emit):
     X_tr, X_va, X_te = X_raw.iloc[tr_idx], X_raw.iloc[va_idx], X_raw.iloc[te_idx]
     y_tr, y_va, y_te = y_raw.iloc[tr_idx], y_raw.iloc[va_idx], y_raw.iloc[te_idx]
 
-    from sklearn.compose import ColumnTransformer
-    from sklearn.impute import SimpleImputer
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+    from app.prep import build_tabular_transformer, to_dense
 
     num_cols = [c for c in X_raw.columns if pd.api.types.is_numeric_dtype(X_raw[c])]
     cat_cols = [c for c in X_raw.columns if c not in num_cols]
-    pre = ColumnTransformer([
-        ("num", Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())]), num_cols),
-        ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")),
-                          ("oh", OneHotEncoder(handle_unknown="ignore"))]), cat_cols),
-    ])
+    prep_cfg = config.get("prep") or {}
+    pre = build_tabular_transformer(prep_cfg, num_cols, cat_cols)
     pre.fit(X_tr)
 
-    def _to_dense(m):
-        return np.asarray(m.toarray() if hasattr(m, "toarray") else m, dtype=np.float32)
-
-    Xn_tr = _to_dense(pre.transform(X_tr))
-    Xn_va = _to_dense(pre.transform(X_va))
-    Xn_te = _to_dense(pre.transform(X_te))
+    Xn_tr = to_dense(pre.transform(X_tr))
+    Xn_va = to_dense(pre.transform(X_va))
+    Xn_te = to_dense(pre.transform(X_te))
 
     cls2idx = None
     if is_class:
@@ -284,12 +318,19 @@ def _load_tabular(config: dict, st: dict, device, emit):
     _log(f"划分: 训练 {len(tr_idx)} / 验证 {len(va_idx)} / 测试 {len(te_idx)} "
          f"(test_size={config.get('test_size')}, val_split={config.get('val_split')})")
     class_counts = y_raw.value_counts().to_dict() if is_class else None
+    demo_idx = int(te_idx[0]) if len(te_idx) else int(va_idx[0])
     return {
         "train": loaders[0], "val": loaders[1], "test": loaders[2],
         "num_features": int(Xn_tr.shape[1]),
         "classes": sorted(cls2idx) if cls2idx else None,
         "class_counts": {str(k): int(v) for k, v in (class_counts or {}).items()},
         "n": len(df),
+        "demo": {
+            "kind": "tabular",
+            "columns": [str(c) for c in X_raw.columns],
+            "row": {str(k): _demo_value(v) for k, v in X_raw.iloc[demo_idx].items()},
+            "true_label": _demo_value(y_raw.iloc[demo_idx]),
+        },
     }
 
 
@@ -352,12 +393,18 @@ def _load_text(config: dict, st: dict, device, emit):
           "n_test": int(len(te_idx)), "vocab_size": len(vocab), "seed": st["seed"]})
     _log(f"文本划分: 训练 {len(tr_idx)} / 验证 {len(va_idx)} / 测试 {len(te_idx)}，"
          f"词表 {len(vocab)}，序列长度 {seq_len}")
+    demo_idx = int(te_idx[0]) if len(te_idx) else int(va_idx[0])
     return {
         "train": loaders[0], "val": loaders[1], "test": loaders[2],
         "num_tokens": len(vocab), "max_seq_len": seq_len,
         "classes": sorted(cls2idx),
         "class_counts": {str(k): int(v) for k, v in y_raw.value_counts().items()},
         "n": len(df),
+        "demo": {
+            "kind": "text",
+            "text": _demo_value(texts.iloc[demo_idx]),
+            "true_label": _demo_value(y_raw.iloc[demo_idx]),
+        },
     }
 
 
@@ -370,10 +417,17 @@ def _load_image(config: dict, st: dict, device, emit):
     img_root = _safe(ds_dir, "images")
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
     size = st["image_size"]
+    augment = str((config.get("prep") or {}).get("augment") or "flip_rotate")
+    aug_ops = []
+    if augment in ("flip_rotate", "all"):
+        aug_ops += [transforms.RandomHorizontalFlip(), transforms.RandomRotation(10)]
+    elif augment == "crop":
+        aug_ops.append(transforms.RandomResizedCrop(size, scale=(0.8, 1.0)))
+    elif augment == "color_jitter":
+        aug_ops.append(transforms.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25))
     train_tf = transforms.Compose([
         transforms.Resize((size, size)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
+        *aug_ops,
         transforms.ToTensor(),
         transforms.Normalize(mean, std),
     ])
@@ -416,10 +470,16 @@ def _load_image(config: dict, st: dict, device, emit):
     emit({"type": "split", "n_train": n_train, "n_val": n_val, "n_test": n_test,
           "n_images": n_total, "classes": classes, "seed": st["seed"]})
     _log(f"图像划分: 训练 {n_train} / 验证 {n_val} / 测试 {n_test}，类别 {len(classes)}")
+    demo_idx = int(test_idx[0]) if test_idx else int(val_idx[0])
     return {
         "train": train_loader, "val": val_loader, "test": test_loader,
         "classes": classes, "class_counts": counts, "num_classes": len(classes),
         "n": n_total,
+        "demo": {
+            "kind": "image",
+            "path": str(full.samples[demo_idx][0]),
+            "class": classes[int(full.samples[demo_idx][1])],
+        },
     }
 
 
@@ -553,6 +613,58 @@ def _save_best(net, data: dict, epoch: int, val_metric: float, path: Path, task:
     torch.save(checkpoint, str(path))
 
 
+def _save_demo(run_dir: Path, data: dict, net, device, cfg: dict) -> dict | None:
+    """用最佳模型在测试集（无测试集时用验证集）首个样本上生成答辩演示。"""
+    demo = data.get("demo")
+    if not demo:
+        return None
+    torch = _torch()
+    loader = data["test"] if data.get("test") is not None and len(data["test"].dataset) > 0 else data.get("val")
+    if loader is None or len(loader.dataset) == 0:
+        return None
+    x, _ = next(iter(loader))
+    x = x[:1].to(device, non_blocking=True)
+    net.eval()
+    with torch.no_grad():
+        logits = net(x)
+    task = cfg.get("task")
+    classification = task != "tabular_regression"
+    out = {
+        "task": task,
+        "model": cfg.get("model"),
+        "model_label": cfg.get("model_label"),
+        "input_kind": demo.get("kind"),
+        "input_columns": demo.get("columns"),
+        "input": demo.get("row") if demo.get("kind") == "tabular"
+                 else demo.get("text") if demo.get("kind") == "text" else demo.get("path"),
+        "image_class": demo.get("class"),
+        "true_label": demo.get("true_label"),
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    if classification:
+        probs = torch.softmax(logits[0].cpu(), dim=0)
+        classes = data.get("classes") or []
+        pred_idx = int(probs.argmax(dim=0))
+        out["predicted_label"] = classes[pred_idx] if pred_idx < len(classes) else str(pred_idx)
+        out["probabilities"] = [
+            {"label": classes[i] if i < len(classes) else str(i), "prob": round(float(p), 4)}
+            for i, p in enumerate(probs)
+        ]
+    else:
+        out["predicted_value"] = round(float(logits.reshape(-1)[0].cpu()), 4)
+    if demo.get("kind") == "image" and demo.get("path"):
+        src = Path(str(demo["path"]))
+        if src.exists():
+            try:
+                shutil.copy2(src, _safe(run_dir, "demo_sample.png"))
+            except Exception as e:
+                _log(f"演示图片复制跳过: {e}")
+    _write_json(_safe(run_dir, "demo.json"), out)
+    _log("已生成答辩演示：demo.json"
+         + (" + demo_sample.png" if (run_dir / "demo_sample.png").exists() else ""))
+    return out
+
+
 def fit(config: dict, run_dir) -> dict:
     """按 config 训练并把产物写入 run_dir；失败时上抛异常，由入口统一写 failed。"""
     torch = _torch()
@@ -664,11 +776,15 @@ def fit(config: dict, run_dir) -> dict:
         net.load_state_dict(ckpt["state_dict"])
         _log(f"已回读 best.pt（epoch {ckpt.get('epoch')}，验证指标 {ckpt.get('val_metric')}）")
 
+    _save_demo(run_dir, data, net, device, cfg)
+
     _log("训练结束，生成评估图表 ...")
     from app.plots import plot_class_balance, plot_confusion_matrix, plot_roc, plot_training_curves
 
     plot_training_curves(epoch_logs, _safe(run_dir, "curves.png"))
     artifacts = ["curves.png"]
+    if (run_dir / "demo_sample.png").exists():
+        artifacts.append("demo_sample.png")
 
     final_loader = data["test"] if data["test"] is not None and len(data["test"].dataset) > 0 else val_load
     eval_source = "test" if final_loader is data["test"] else "val"
@@ -807,8 +923,11 @@ def train_from_run_dir(run_dir) -> int:
     except Exception:
         err = traceback.format_exc()
         _log("训练失败:\n" + err)
+        failure = _classify_failure(err)
         _safe(run_dir, "status.json").write_text(
             json.dumps(_json_safe({"state": "failed", "error": err[-1500:],
+                                   "failure_kind": failure["kind"],
+                                   "failure_hint": failure["hint"],
                                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}),
                        ensure_ascii=False), encoding="utf-8",
         )

@@ -18,6 +18,8 @@ _TRAINING_PARAMS: dict = {
     "grad_clip": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0,
                   "label": "梯度裁剪(0=关闭)"},
     "seed": {"type": "int", "default": 42, "min": 0, "max": 999999, "label": "随机种子"},
+    "device": {"type": "choice", "default": "auto",
+               "options": ["auto", "cpu", "gpu"], "label": "训练设备"},
 }
 
 

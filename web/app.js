@@ -147,7 +147,7 @@ const C = { teal: "#0d6e63", orange: "#c2410c", ink: "#1d2023", gray: "#9aa1a6",
 
 const state = {
   health: null, config: null, datasets: [], builtin: [], runs: [], reports: [],
-  train: { datasetId: "", task: "", model: "", params: {}, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "", name: "", group: "baseline", note: "" },
+  train: { datasetId: "", task: "", model: "", params: {}, prep: null, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "", name: "", group: "baseline", note: "" },
   openRun: null, openDataset: null, pollTimer: null,
   reportSelected: loadReportSel(), compareSel: loadCompareSel(),
 };
@@ -383,6 +383,15 @@ async function openDataset(id) {
 
 /* ================= 训练页 ================= */
 async function pageTrain() {
+  if (typeof loadWizard === "function") {
+    try {
+      await loadWizard();
+      const prep = wizardState && wizardState.steps && wizardState.steps["3"] && wizardState.steps["3"].template;
+      if (prep && typeof prep === "object") {
+        state.train = { ...state.train, prep: { ...prep } };
+      }
+    } catch { /* 向导数据加载失败时不阻塞训练页 */ }
+  }
   const [dsR, modelsR] = await Promise.all([api("/api/datasets"), api("/api/models")]);
   state.datasets = dsR.datasets; state.models = modelsR.catalog;
   const t = state.train;
@@ -399,6 +408,12 @@ async function pageTrain() {
   const modelKeys = taskDef ? Object.keys(taskDef.models) : [];
   if (!modelKeys.includes(t.model)) t.model = modelKeys[0] || "";
   const isImage = t.task === "image_classification";
+  const prepTxt = t.prep && typeof t.prep === "object"
+    ? `${t.prep.missing === "impute" ? "自动填充缺失" : t.prep.missing === "drop" ? "删除缺失行" : "保留缺失"}
+       ｜ 编码 ${({onehot:"独热",label:"标签",none:"关闭"})[t.prep.encode] || t.prep.encode || "关闭"}
+       ｜ 标准化 ${({standard:"Z-score",minmax:"Min-Max",robust:"稳健",none:"关闭"})[t.prep.scale] || t.prep.scale || "关闭"}
+       ｜ 测试集 ${t.prep.test_size ?? 0.2}`
+    : "使用系统默认预处理（自动填充、独热编码、标准化）。";
 
   $("#page").innerHTML = `
     ${pageHead("02", "模型训练", "选数据集，选模型，表单里调参数，点一次按钮开始训练。训练在后台运行，可回到总览再做别的事。")}
@@ -427,6 +442,8 @@ async function pageTrain() {
           </div>
           <div class="hint" id="tr-split-hint"></div></div>
       </div>
+      <div class="form-row" style="margin-top:10px"><label>向导预处理策略（来自第 3 步，可直接沿用）</label>
+        <div class="hint" id="tr-prep-note">${esc(prepTxt)}</div></div>
     </div>
     <div class="section"><h2>选择模型</h2>
       <div class="model-grid">${modelKeys.map((k) => {
@@ -502,6 +519,7 @@ async function pageTrain() {
       const body = {
         dataset_id: state.train.datasetId, task: state.train.task, model: state.train.model,
         params: state.train.params, target: state.train.target || null,
+        prep: state.train.prep || {},
         text_column: state.train.textColumn || null, test_size: state.train.testSize,
         val_split: state.train.valSplit, random_state: state.train.seed,
         name: state.train.name, group: state.train.group, note: state.train.note,
@@ -592,6 +610,7 @@ async function openRun(id, silent = false) {
           </div>
         </div>
         ${d.error ? `<div class="mt8 small" style="color:var(--danger)">训练失败：${esc(d.error).slice(0, 300)}</div>` : ""}
+        ${d.failure_hint ? `<div class="panel small mt8" style="background:#fff6e9;border-color:var(--warn);color:#5b4a1f">${esc(d.failure_hint)}</div>` : ""}
         <div class="meta-box mt14">
           <div class="form-grid">
             <div class="form-row"><label>实验名称</label><input id="meta-name" maxlength="80" value="${esc(d.name || "")}" placeholder="${esc(d.config.model_label || d.config.model || "实验名称")}"></div>
@@ -626,7 +645,8 @@ async function openRun(id, silent = false) {
       const cfg = d.config || {};
       state.train = {
         datasetId: cfg.dataset_id || "", task: cfg.task || "", model: cfg.model || "",
-        params: { ...(cfg.params || {}) }, target: cfg.target || "", textColumn: cfg.text_column || "",
+        params: { ...(cfg.params || {}) }, prep: (cfg.prep && typeof cfg.prep === "object") ? { ...cfg.prep } : {},
+        target: cfg.target || "", textColumn: cfg.text_column || "",
         testSize: cfg.test_size ?? 0.2, valSplit: cfg.val_split ?? 0.2, seed: cfg.random_state ?? 42,
         name: cfg.name || "", group: cfg.group || "baseline", note: cfg.note || "",
       };

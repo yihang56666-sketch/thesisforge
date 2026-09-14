@@ -26,7 +26,7 @@
 
 ### 方式一：Windows 离线整合包（推荐新手）
 
-到 [Releases](../../releases) 下载 `ThesisForge-v0.4.0-win64-offline.zip`（无需安装 Python，解压即用）：
+到 [Releases](../../releases) 下载 `ThesisForge-v0.4.1-win64-offline.zip`（无需安装 Python，解压即用）：
 
 1. 解压到任意目录；
 2. 双击 `ThesisForge.exe`（或 `启动毕设工坊.bat`），默认打开 Windows 桌面窗口（未装 WebView2 时自动改用浏览器）；
@@ -34,7 +34,7 @@
 
 图像分类训练需要 PyTorch：双击包内 `安装图像训练-CPU版.bat`（或 `安装图像训练-GPU版.bat`，需 NVIDIA 显卡）。
 
-不想解压也可以下载独立单文件版 `ThesisForge-v0.4.0-win-x64.exe`，双击即用（自带 Python 与表格/文本/报告全部依赖；为控制体积不含 PyTorch，图像训练请用离线整合包）。
+不想解压也可以下载独立单文件版 `ThesisForge-v0.4.1-win-x64.exe`，双击即用（自带 Python 与表格/文本/报告全部依赖；为控制体积不含 PyTorch，图像训练请用离线整合包）。
 
 ### 启动提示与排查
 

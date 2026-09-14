@@ -35,6 +35,24 @@ def _now() -> str:
 
 # ---------------------------------------------------------------- 内置数据集
 BUILTIN_CATALOG: dict[str, dict] = {
+    "pseudo_image": {
+        "name": "合成图形分类（图像·示例）",
+        "loader": lambda: _make_pseudo_image(),
+        "task": "image_classification",
+        "desc": "离线生成的 5 类基础图形图像，共 175 张，用于无网络环境跑通完整图像神经网络流程。",
+    },
+    "pseudo_text": {
+        "name": "中文影评情感分类（文本·示例）",
+        "loader": lambda: _make_pseudo_text(),
+        "task": "text_classification",
+        "desc": "320 条中文影评短文本，正面/负面二分类，用于无网络环境跑通文本分类与词向量网络。",
+    },
+    "watersurface": {
+        "name": "水面环境分类（图像·水面检测）",
+        "loader": lambda: _make_water_surface(),
+        "task": "image_classification",
+        "desc": "离线生成的 5 类水面环境图像（清水/水草/枯枝/芦苇/硬质岸线），共 275 张，用于水面检测类毕设。",
+    },
     "iris": {
         "name": "鸢尾花 Iris（多分类·入门）",
         "loader": lambda: _from_sklearn("load_iris"),
@@ -74,6 +92,157 @@ BUILTIN_CATALOG: dict[str, dict] = {
 }
 
 _SK_FUNCS = None
+
+
+def _make_pseudo_image() -> tuple[None, None]:
+    """生成离线合成图形图像数据集（类别文件夹/PNG），无需网络下载。"""
+    rnd = _rng(20260913)
+    classes = {
+        "circle": [(255, 82, 82), "circle"],
+        "square": [(82, 120, 255), "square"],
+        "triangle": [(92, 178, 92), "triangle"],
+        "diamond": [(214, 145, 59), "diamond"],
+        "star": [(148, 92, 214), "star"],
+    }
+    n_per = 35
+    img_root = _demo_image_root("pseudo_image")
+    for name, (color, shape) in classes.items():
+        cls_dir = img_root / name
+        cls_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(1, n_per + 1):
+            _draw_shape(cls_dir / f"{i:03d}.png", color, shape, rnd)
+    return None, None
+
+
+def _make_water_surface() -> tuple[None, None]:
+    """生成离线水面环境分类图像，覆盖水面检测类毕设的 5 种典型场景。"""
+    rnd = _rng(20260914)
+    classes = {
+        "clean_water": [(73, 151, 208), "water"],
+        "weeds_water": [(51, 148, 92), "weeds"],
+        "wood_water": [(126, 94, 61), "wood"],
+        "reeds_water": [(105, 130, 60), "reeds"],
+        "hard_bank": [(152, 137, 123), "bank"],
+    }
+    n_per = 55
+    img_root = _demo_image_root("watersurface")
+    for name, (color, kind) in classes.items():
+        cls_dir = img_root / name
+        cls_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(1, n_per + 1):
+            _draw_scene(cls_dir / f"{i:03d}.png", color, kind, rnd)
+    return None, None
+
+
+def _demo_image_root(ds_id: str) -> Path:
+    # 与 load_builtin 保持一致：统一用 _slug 规范化后的目录 ID。
+    ds_dir = dataset_dir(_slug(ds_id))
+    if ds_dir.exists():
+        shutil.rmtree(ds_dir)
+    img_root = ds_dir / "images"
+    img_root.mkdir(parents=True)
+    return img_root
+
+
+def _rng(seed: int):
+    import random
+
+    return random.Random(seed)
+
+
+def _draw_shape(path: Path, color, shape: str, rnd) -> None:
+    """PIL 合成简单图形；没有 PIL 时明确失败，避免生成空数据集。"""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        raise RuntimeError("生成内置图像示例需要 Pillow，请安装 Pillow")
+    img = Image.new("RGB", (64, 64), (245, 244, 238))
+    d = ImageDraw.Draw(img)
+    noise = [(rnd.randint(-14, 14), rnd.randint(-14, 14), rnd.randint(-14, 14)) for _ in range(240)]
+    for x, y in ((rnd.randint(0, 63), rnd.randint(0, 63)) for _ in range(120)):
+        r, g, b = noise.pop()
+        d.point((x, y), fill=(max(0, min(255, 245 + r)), max(0, min(255, 244 + g)), max(0, min(255, 238 + b))))
+    if shape == "circle":
+        d.ellipse((12, 12, 52, 52), fill=color)
+    elif shape == "square":
+        d.rectangle((12, 12, 52, 52), fill=color)
+    elif shape == "triangle":
+        d.polygon([(32, 8), (54, 54), (10, 54)], fill=color)
+    elif shape == "diamond":
+        d.polygon([(32, 8), (56, 32), (32, 56), (8, 32)], fill=color)
+    else:
+        d.polygon([(32, 6), (40, 24), (59, 26), (45, 39), (49, 58), (32, 48),
+                   (15, 58), (19, 39), (5, 26), (24, 24)], fill=color)
+    img.save(path, "PNG")
+
+
+def _draw_scene(path: Path, base, kind: str, rnd) -> None:
+    """合成水面场景：底色水面 + 对应类别的前景纹理，保持类别可区分。"""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        raise RuntimeError("生成内置图像示例需要 Pillow，请安装 Pillow")
+    img = Image.new("RGB", (64, 64), base)
+    d = ImageDraw.Draw(img)
+    for _ in range(360):
+        x, y = rnd.randint(0, 63), rnd.randint(0, 63)
+        drift = rnd.randint(-30, 30)
+        c = tuple(max(0, min(255, v + drift)) for v in base)
+        d.point((x, y), fill=c)
+    if kind == "weeds":
+        for _ in range(46):
+            x0 = rnd.randint(2, 62)
+            d.line((x0, 64, max(0, x0 - rnd.randint(-5, 5)), rnd.randint(20, 58)),
+                   fill=(43, 128, 76), width=2)
+    elif kind == "wood":
+        for _ in range(9):
+            x0 = rnd.randint(2, 58)
+            d.rectangle((x0, rnd.randint(26, 60), min(63, x0 + rnd.randint(5, 12)), rnd.randint(28, 63)),
+                        fill=(108, 78, 52))
+    elif kind == "reeds":
+        for _ in range(64):
+            x0 = rnd.randint(1, 62)
+            d.line((x0, 64, x0 + rnd.randint(-3, 3), rnd.randint(8, 52)),
+                   fill=(118, 140, 62), width=1)
+            d.ellipse((max(0, x0 - 2), rnd.randint(4, 28), min(63, x0 + 3), rnd.randint(8, 34)),
+                      fill=(137, 148, 74))
+    elif kind == "bank":
+        d.rectangle((0, 34, 63, 63), fill=(148, 132, 116))
+        for _ in range(70):
+            x, y = rnd.randint(0, 63), rnd.randint(34, 63)
+            d.point((x, y), fill=(126, 112, 98))
+    else:
+        d.ellipse((rnd.randint(6, 52), rnd.randint(6, 52), rnd.randint(12, 60), rnd.randint(12, 60)),
+                  fill=None, outline=(235, 240, 245))
+    img.save(path, "PNG")
+
+
+def _make_pseudo_text() -> tuple[pd.DataFrame, str]:
+    """离线生成中文影评情感二分类示例（无外部依赖）。"""
+    rnd = _rng(20260915)
+    pos_parts = [
+        "剧情紧凑", "演员演技在线", "画面非常美", "配乐很加分", "结尾出乎意料",
+        "笑点和泪点都有", "细节处理到位", "节奏把握得很好", "看完很感动",
+        "值得二刷", "人物塑造立体", "特效让人惊喜",
+    ]
+    neg_parts = [
+        "剧情拖沓", "表演很尴尬", "画面杂乱", "配乐突兀", "结尾莫名其妙",
+        "笑点尴尬泪点生硬", "细节粗糙", "节奏忽快忽慢", "看完毫无印象",
+        "不会再看第二遍", "人物单薄", "特效假得离谱",
+    ]
+    rows = []
+    for i in range(320):
+        neg = i % 2 == 1
+        parts = neg_parts if neg else pos_parts
+        picks = rnd.sample(parts, 3)
+        text = "这部" + ("电影" if rnd.random() < 0.6 else "片子") + "：" + "，".join(picks) + "。" + (
+            "整体观感一般。" if neg else "整体观感很好。"
+        )
+        rows.append({"text": text, "label": ("负面" if neg else "正面")})
+    df = pd.DataFrame(rows)
+    df["label"] = df["label"].astype("category")
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    return df, "label"
 
 
 def _from_sklearn(fn_name: str) -> tuple[pd.DataFrame, str]:
@@ -165,6 +334,8 @@ def run_eda(ds_id: str) -> list[str]:
             if paths:
                 files.append(Path(plots.plot_sample_images(paths, labels, eda_dir / "samples.png")).name)
         meta["stats"] = {"class_counts": counts}
+        meta["n_rows"] = 0
+        meta["columns"] = []
     else:
         df = pd.read_csv(ds_dir / "dataset.csv")
         target = meta.get("target")
@@ -178,6 +349,7 @@ def run_eda(ds_id: str) -> list[str]:
             class_counts = {}
         num_df = df.select_dtypes(include=[np.number])
         desc = {}
+        duplicates = int(df.duplicated().sum())
         if num_df.shape[1] >= 1:
             sample = num_df.sample(n=min(len(num_df), 3000), random_state=42)
             files.append(Path(plots.plot_numeric_hist({c: sample[c].dropna().values for c in sample.columns}, eda_dir / "histograms.png")).name)
@@ -193,11 +365,16 @@ def run_eda(ds_id: str) -> list[str]:
             "n_cols": int(df.shape[1]),
             "column_types": col_types,
             "missing": missing,
+            "duplicates": duplicates,
+            "duplicate_rate": round(duplicates / len(df), 4) if len(df) else 0.0,
             "class_counts": {str(k): int(v) for k, v in class_counts.items()},
             "describe": {k: {kk: (None if pd.isna(vv) else float(vv)) for kk, vv in v.items()} for k, v in desc.items()},
         }
         meta["n_rows"] = int(len(df))
         meta["columns"] = list(df.columns)
+    if "duplicates" not in meta["stats"]:
+        meta["stats"]["duplicates"] = int(meta["stats"].get("duplicates", 0))
+        meta["stats"]["duplicate_rate"] = float(meta["stats"].get("duplicate_rate", 0.0))
     meta["eda_files"] = files
     meta["eda_done"] = True
     _save_meta(ds_dir, meta)
@@ -208,25 +385,47 @@ def run_eda(ds_id: str) -> list[str]:
 def load_builtin(name: str) -> dict:
     if name not in BUILTIN_CATALOG:
         raise ValueError(f"未知内置数据集: {name}")
-    df, target = BUILTIN_CATALOG[name]["loader"]()
     ds_id = _slug(name)
     ds_dir = dataset_dir(ds_id)
     if ds_dir.exists():
         shutil.rmtree(ds_dir)
-    ds_dir.mkdir(parents=True)
-    df.to_csv(ds_dir / "dataset.csv", index=False)
-    meta = {
-        "id": ds_id,
-        "name": BUILTIN_CATALOG[name]["name"],
-        "source": "builtin",
-        "type": "tabular",
-        "task": BUILTIN_CATALOG[name]["task"],
-        "target": target,
-        "columns": list(df.columns),
-        "n_rows": int(len(df)),
-        "created_at": _now(),
-        "desc": BUILTIN_CATALOG[name]["desc"],
-    }
+    df, target = BUILTIN_CATALOG[name]["loader"]()
+    if df is None:
+        # 图像示例：图片目录已由生成器写好，只补元数据
+        classes = [d.name for d in sorted((ds_dir / "images").iterdir()) if d.is_dir()]
+        n_images = sum(len(list((ds_dir / "images" / c).glob("*.png"))) for c in classes)
+        if len(classes) < 2:
+            raise ValueError("图像示例生成失败：类别不足")
+        meta = {
+            "id": ds_id,
+            "name": BUILTIN_CATALOG[name]["name"],
+            "source": "builtin",
+            "type": "image",
+            "task": "image_classification",
+            "target": None,
+            "columns": [],
+            "n_images": n_images,
+            "n_classes": len(classes),
+            "classes": classes,
+            "created_at": _now(),
+            "desc": BUILTIN_CATALOG[name]["desc"],
+        }
+    else:
+        ds_dir.mkdir(parents=True)
+        df.to_csv(ds_dir / "dataset.csv", index=False)
+        meta = {
+            "id": ds_id,
+            "name": BUILTIN_CATALOG[name]["name"],
+            "source": "builtin",
+            "type": "tabular",
+            "task": BUILTIN_CATALOG[name]["task"],
+            "target": target,
+            "text_column": "text" if BUILTIN_CATALOG[name]["task"] == "text_classification" else None,
+            "columns": list(df.columns),
+            "n_rows": int(len(df)),
+            "created_at": _now(),
+            "desc": BUILTIN_CATALOG[name]["desc"],
+        }
     _save_meta(ds_dir, meta)
     run_eda(ds_id)
     return load_meta(ds_id)
