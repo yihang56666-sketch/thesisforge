@@ -225,6 +225,91 @@ def _run_by_group(runs: list[dict], group: str) -> dict | None:
     return None
 
 
+def _run_eval_source(run: dict) -> str:
+    return {"test": "独立测试集", "val": "验证集"}.get(
+        (run.get("summary") or {}).get("eval_source"), "评估集"
+    )
+
+
+def _abstract_text(title: str, dataset_meta: dict | None, runs: list[dict]) -> str:
+    """无 AI 草稿时，基于真实实验结果生成更具体的中文摘要。"""
+    if not runs:
+        return ""
+    dataset_name = (dataset_meta or {}).get("name")
+    lead = f"本文以{dataset_name}为实验对象，围绕{title}展开研究。" if dataset_name \
+        else f"本文围绕{title}展开研究。"
+
+    base = _run_by_group(runs, "baseline")
+    improved = _run_by_group(runs, "improved")
+    result = ""
+    if base and improved:
+        base_name, base_value = _primary_metric(base)
+        imp_name, imp_value = _primary_metric(improved)
+        source = _run_eval_source(improved)
+        base_label = (base.get("summary") or {}).get("model_label", "基线模型")
+        imp_label = (improved.get("summary") or {}).get("model_label", "改进模型")
+        if base_name == imp_name:
+            relative = (imp_value - base_value) / base_value * 100 if base_value else 0.0
+            result = (f"在{source}上，{base_name}由基线模型{base_label}的 {base_value:.4f} "
+                      f"提升至改进模型{imp_label}的 {imp_value:.4f}，相对提升 {relative:.1f}%。")
+        else:
+            result = (f"基线模型{base_label}的{base_name}为 {base_value:.4f}，"
+                      f"改进模型{imp_label}的{imp_name}为 {imp_value:.4f}。")
+    else:
+        run = base or improved
+        name, value = _primary_metric(run)
+        source = _run_eval_source(run)
+        label = (run.get("summary") or {}).get("model_label", "所选模型")
+        result = f"{label}模型在{source}上的{name}为 {value:.4f}。"
+
+    return lead + result + "实验过程覆盖数据预处理、模型训练、结果评估与可视化分析。"
+
+
+def _conclusion_text(dataset_meta: dict | None, runs: list[dict]) -> str:
+    """无 AI 草稿时，基于真实实验结果生成更具体的结论。"""
+    if not runs:
+        return ""
+    dataset_name = (dataset_meta or {}).get("name")
+    lead = f"本文在{dataset_name}上完成了数据处理、模型训练与结果分析。" if dataset_name \
+        else "本文完成了数据处理、模型训练与结果分析。"
+
+    base = _run_by_group(runs, "baseline")
+    improved = _run_by_group(runs, "improved")
+    ablation = _run_by_group(runs, "ablation")
+    result = ""
+    if base and improved:
+        base_name, base_value = _primary_metric(base)
+        imp_name, imp_value = _primary_metric(improved)
+        base_label = (base.get("summary") or {}).get("model_label", "基线模型")
+        imp_label = (improved.get("summary") or {}).get("model_label", "改进模型")
+        if base_name == imp_name:
+            result = (f"改进模型{imp_label}将{base_name}从基线模型{base_label}的 "
+                      f"{base_value:.4f} 提升至 {imp_value:.4f}。")
+        else:
+            result = (f"基线模型{base_label}的{base_name}为 {base_value:.4f}，"
+                      f"改进模型{imp_label}的{imp_name}为 {imp_value:.4f}。")
+    elif base:
+        name, value = _primary_metric(base)
+        source = _run_eval_source(base)
+        label = (base.get("summary") or {}).get("model_label", "基线模型")
+        result = f"{label}模型在{source}上的{name}为 {value:.4f}。"
+    elif improved:
+        name, value = _primary_metric(improved)
+        source = _run_eval_source(improved)
+        label = (improved.get("summary") or {}).get("model_label", "改进模型")
+        result = f"{label}模型在{source}上的{name}为 {value:.4f}。"
+
+    if ablation:
+        imp_name, imp_value = _primary_metric(improved) if improved else ("主指标", 0.0)
+        abl_name, abl_value = _primary_metric(ablation)
+        if imp_name == abl_name:
+            imp_label = (improved.get("summary") or {}).get("model_label", "完整方案")
+            abl_label = (ablation.get("summary") or {}).get("model_label", "消融方案")
+            result += (f"消融实验中，{abl_label}的{abl_name}为 {abl_value:.4f}，"
+                       f"与完整方案{imp_label}相差 {abl_value - imp_value:+.4f}。")
+    return lead + result + "未来可在更大规模数据、更细粒度标注与模型解释方面继续完善。"
+
+
 def _repeat_notes(runs: list[dict]) -> list[str]:
     """汇总同一 batch 的重复实验，帮助判断性能波动是否可接受。"""
     grouped: dict[str, list[dict]] = {}
@@ -403,9 +488,12 @@ def build_report(
     if drafts.get("abstract"):
         _md_to_paras(doc, drafts["abstract"])
     else:
-        _para(doc, f"本文围绕“{title}”展开研究。研究工作涵盖数据集的获取与预处理、基线模型的构建与训练、"
-                   f"算法的改进与对比实验，以及结果的可视化分析。（配置 AI 接口后可自动起草本节，"
-                   f"导出后请务必用自己的语言重写。）")
+        abstract = _abstract_text(title, dataset_meta, runs)
+        if not abstract:
+            abstract = (f"本文围绕“{title}”展开研究。研究工作涵盖数据集的获取与预处理、"
+                        f"基线模型的构建与训练、算法的改进与对比实验，以及结果的可视化分析。"
+                        f"（配置 AI 接口后可自动起草本节，导出后请务必用自己的语言重写。）")
+        _para(doc, abstract)
     kw = "、".join(["机器学习", "毕业设计"] + sorted({r["config"].get("model_label", "").split(" (")[0] for r in runs})[:2])
     p = doc.add_paragraph(); p.paragraph_format.line_spacing = 1.5
     _first_line_chars(p, 200)
@@ -565,6 +653,7 @@ def build_report(
         rd = Path(r.get("run_dir", ""))
         model_label = s.get("model_label", cfg.get("model", "实验"))
         _heading(doc, f"4.{ri + 3}  {model_label} 实验结果分析", 2)
+        figure_start = fig_no + 1
         if s.get("cv_scores"):
             import numpy as np
 
@@ -586,6 +675,11 @@ def build_report(
             for fname, cap in [("segmentation_prediction.png", "测试集分割预测掩码")]:
                 if _figure(doc, rd / fname, f"图 4-{fig_no + 1}  {cap}（{model_label}）"):
                     fig_no += 1
+        if fig_no >= figure_start:
+            _para(doc, f"图 4-{figure_start} 至 图 4-{fig_no} 给出{model_label}的关键实验图。"
+                       "分析时可将这些图与表 4-2 的指标结合：先看训练曲线是否稳定收敛，"
+                       "再检查混淆矩阵中的主要误分类类别；若包含预测可视化，还应核对边界或预测质量；"
+                       "同时交叉检查训练配置、数据划分和验证集表现，避免只凭单张图下结论。")
         if drafts.get(f"analysis:{r['run_id']}"):
             _md_to_paras(doc, drafts[f"analysis:{r['run_id']}"])
         elif s.get("metrics"):
@@ -599,9 +693,12 @@ def build_report(
     if drafts.get("conclusion"):
         _md_to_paras(doc, drafts["conclusion"])
     else:
-        _para(doc, "本文完成了从数据准备、模型训练到实验分析的完整研究流程。实验结果表明，"
-                   "所选模型在目标数据集上取得了较好的性能。未来工作可从以下方向展开：引入更多对比模型、"
-                   "开展消融实验验证各改进模块的有效性、扩大数据规模并探索模型的可解释性。")
+        conclusion = _conclusion_text(dataset_meta, runs)
+        if not conclusion:
+            conclusion = ("本文完成了从数据准备、模型训练到实验分析的完整研究流程。实验结果表明，"
+                          "所选模型在目标数据集上取得了较好的性能。未来工作可从以下方向展开：引入更多对比模型、"
+                          "开展消融实验验证各改进模块的有效性、扩大数据规模并探索模型的可解释性。")
+        _para(doc, conclusion)
 
     # ---------------- 参考文献（GB/T 7714 风格）
     _heading(doc, "参考文献", 1)

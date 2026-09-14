@@ -143,6 +143,58 @@ class ReportResearchDepthTest(unittest.TestCase):
         self.assertTrue(any("U-Net" in t and "编码器" in t and "解码器" in t for t in texts))
         self.assertTrue(len(doc.inline_shapes) > 0)
 
+    def test_report_generates_concrete_abstract_and_conclusion(self):
+        runs = [
+            {
+                "run_id": "base", "name": "基线", "group": "baseline",
+                "config": {"task": "tabular_classification", "model": "logistic_regression",
+                           "model_label": "逻辑回归", "group": "baseline", "params": {}},
+                "summary": {"model_label": "逻辑回归", "group": "baseline",
+                            "primary_metric": {"name": "accuracy", "value": 0.80},
+                            "metrics": {"accuracy": 0.80}, "eval_source": "test"},
+            },
+            {
+                "run_id": "imp", "name": "改进", "group": "improved",
+                "config": {"task": "tabular_classification", "model": "mlp",
+                           "model_label": "MLP", "group": "improved", "params": {}},
+                "summary": {"model_label": "MLP", "group": "improved",
+                            "primary_metric": {"name": "accuracy", "value": 0.86},
+                            "metrics": {"accuracy": 0.86}, "eval_source": "test"},
+            },
+        ]
+        dataset_meta = {"name": "示例分类集", "desc": "用于验证报告质量。", "columns": ["x1", "x2"],
+                        "target": "label", "stats": {"class_counts": {"yes": 80, "no": 20}}}
+        out = Path(tempfile.mkdtemp()) / "report.docx"
+        build_report(out, "基于深度学习的分类研究", {}, dataset_meta, None, runs, {})
+        doc = Document(str(out))
+        texts = [p.text for p in doc.paragraphs]
+
+        self.assertTrue(any("示例分类集" in t and "0.8000" in t and "0.8600" in t for t in texts))
+        self.assertTrue(any("7.5%" in t and "逻辑回归" in t and "MLP" in t for t in texts))
+        self.assertTrue(any("本文在示例分类集" in t and "0.8600" in t for t in texts))
+
+    def test_report_cites_generated_analysis_figures(self):
+        import io
+        from PIL import Image
+
+        run_dir = Path(tempfile.mkdtemp())
+        Image.new("RGB", (8, 8), "white").save(run_dir / "curves.png")
+        Image.new("RGB", (8, 8), "white").save(run_dir / "confusion_matrix.png")
+        runs = [{
+            "run_id": "run", "name": "实验", "group": "baseline", "run_dir": str(run_dir),
+            "config": {"task": "image_classification", "model": "cnn",
+                       "model_label": "CNN", "group": "baseline", "params": {}},
+            "summary": {"model_label": "CNN", "group": "baseline",
+                        "primary_metric": {"name": "accuracy", "value": 0.88},
+                        "metrics": {"accuracy": 0.88}, "eval_source": "test"},
+        }]
+        out = Path(tempfile.mkdtemp()) / "report.docx"
+        build_report(out, "基于图像分类的研究", {}, {"name": "示例图像集", "columns": [], "target": "label"}, None, runs, {})
+        doc = Document(str(out))
+        texts = [p.text for p in doc.paragraphs]
+
+        self.assertTrue(any("图 4-1 至 图 4-" in t and "CNN" in t for t in texts))
+
 
 if __name__ == "__main__":
     unittest.main()
