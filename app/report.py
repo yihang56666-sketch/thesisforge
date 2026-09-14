@@ -525,6 +525,55 @@ def _task_background_text(runs: list[dict]) -> str:
     return " ".join(pieces)
 
 
+def _domain_context(title: str | None, dataset_meta: dict | None) -> set[str]:
+    """从题目与数据集信息中识别报告应重点解释的应用场景。"""
+    text = " ".join([
+        str(title or ""),
+        str((dataset_meta or {}).get("name") or ""),
+        str((dataset_meta or {}).get("desc") or ""),
+    ])
+    contexts: set[str] = set()
+    if any(k in text for k in ("水面", "水域", "水环境", "河道", "湖泊", "海洋")):
+        contexts.add("water_surface")
+    if any(k in text for k in ("无人机", "航拍", "低空", "遥感")):
+        contexts.add("aerial_detection")
+    return contexts
+
+
+def _domain_context_text(contexts: set[str]) -> str:
+    """生成与具体采集环境直接相关的背景说明，而不是通用领域套话。"""
+    pieces: list[str] = []
+    if "water_surface" in contexts:
+        pieces.append(
+            "在水面场景中，倒影与反光会改变背景纹理，光照变化会影响目标与水面的对比度，"
+            "小目标还容易因边界模糊而降低分割或检测稳定性；因此模型分析和数据增强"
+            "需要围绕这些实际干扰条件展开。"
+        )
+    if "aerial_detection" in contexts:
+        pieces.append(
+            "在无人机航拍场景中，拍摄视角与高度变化会带来目标尺度差异，"
+            "小目标在复杂背景下更容易漏检，光照变化也会影响颜色与边缘特征；"
+            "实验设计需要考虑这些条件下的模型稳定性。"
+        )
+    return " ".join(pieces)
+
+
+def _domain_limitations_text(contexts: set[str]) -> list[str]:
+    """按具体场景补充研究局限，帮助报告从干扰因素回看模型能力。"""
+    notes: list[str] = []
+    if "water_surface" in contexts:
+        notes.append(
+            "水面场景的倒影、反光和光照变化会改变局部纹理与边界对比度；"
+            "当前实验尚未充分量化这些因素单独引起的性能变化，后续应补充分场景误差分析。"
+        )
+    if "aerial_detection" in contexts:
+        notes.append(
+            "航拍场景中视角、高度变化和小目标密度会影响模型尺度适应性；"
+            "当前实验对这些条件的组合变化覆盖有限，后续应在更多拍摄距离与视角下验证。"
+        )
+    return notes
+
+
 def _literature_review_text(runs: list[dict], dataset_meta: dict | None) -> str:
     """按真实实验覆盖的任务族生成文献综述骨架，避免第二章只写工具栈。"""
     if not runs:
@@ -1018,9 +1067,13 @@ def build_report(
             "随着人工智能技术的快速发展，机器学习与深度学习方法在各行各业得到了广泛应用。"
             "如何利用数据驱动的方法解决实际问题，是当前研究的热点之一。"
         )
+        domain_context = _domain_context(title, dataset_meta)
+        domain_text = _domain_context_text(domain_context)
         _para(doc, task_background + " 本文以此为背景展开研究，"
                    "重点通过可复现实验验证模型选择、改进策略与评价指标之间的关系。"
                    "（导出后请补充 2-3 段与选题直接相关的领域背景。）")
+        if domain_text:
+            _para(doc, domain_text)
     _heading(doc, "1.2  研究内容", 2)
     if drafts.get("content"):
         _md_to_paras(doc, drafts["content"])
@@ -1223,6 +1276,8 @@ def build_report(
 
     _heading(doc, "5.3  研究局限", 2)
     for note in _limitations_text(dataset_meta, runs):
+        _para(doc, note)
+    for note in _domain_limitations_text(_domain_context(title, dataset_meta)):
         _para(doc, note)
 
     _heading(doc, "5.4  未来展望", 2)

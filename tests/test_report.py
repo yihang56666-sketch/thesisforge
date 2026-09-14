@@ -83,6 +83,43 @@ class ReportResearchDepthTest(unittest.TestCase):
         self.assertTrue(any("类别不平衡" in t and "宏平均 F1" in t for t in texts))
         self.assertTrue(any("独立测试集" in t for t in texts))
 
+    def test_water_surface_report_adds_domain_context(self):
+        runs = [{
+            "run_id": "seg", "name": "U-Net", "group": "baseline",
+            "config": {"task": "semantic_segmentation", "model": "unet",
+                       "model_label": "U-Net 语义分割", "group": "baseline", "params": {}},
+            "summary": {"model_label": "U-Net 语义分割", "group": "baseline",
+                        "primary_metric": {"name": "iou", "value": 0.78},
+                        "metrics": {"iou": 0.78, "dice": 0.86, "pixel_accuracy": 0.92},
+                        "eval_source": "test"},
+        }]
+        dataset_meta = {"name": "水面分割示例集", "columns": [], "target": "mask"}
+        out = Path(tempfile.mkdtemp()) / "report.docx"
+        build_report(out, "基于深度学习的水面语义分割", {}, dataset_meta, None, runs, {})
+        doc = Document(str(out))
+        texts = [p.text for p in doc.paragraphs]
+
+        self.assertTrue(any("水面" in t and "倒影" in t and "小目标" in t for t in texts))
+        self.assertTrue(any("光照变化" in t and "边界" in t for t in texts))
+
+    def test_aerial_detection_report_adds_domain_context(self):
+        runs = [{
+            "run_id": "det", "name": "YOLOv8n", "group": "baseline",
+            "config": {"task": "object_detection", "model": "yolov8n",
+                       "model_label": "YOLOv8n", "group": "baseline", "params": {}},
+            "summary": {"model_label": "YOLOv8n", "group": "baseline",
+                        "primary_metric": {"name": "mAP50", "value": 0.82},
+                        "metrics": {"mAP50": 0.82}, "eval_source": "test"},
+        }]
+        dataset_meta = {"name": "航拍目标检测示例集", "columns": [], "target": "bbox"}
+        out = Path(tempfile.mkdtemp()) / "report.docx"
+        build_report(out, "基于深度学习的无人机航拍目标检测", {}, dataset_meta, None, runs, {})
+        doc = Document(str(out))
+        texts = [p.text for p in doc.paragraphs]
+
+        self.assertTrue(any("航拍" in t and "视角" in t and "高度变化" in t for t in texts))
+        self.assertTrue(any("小目标" in t and "光照变化" in t for t in texts))
+
     def test_report_flags_overfitting_from_epoch_history(self):
         runs = [
             {
