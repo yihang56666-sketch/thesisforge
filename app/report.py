@@ -716,6 +716,12 @@ def _limitations_text(dataset_meta: dict | None, runs: list[dict]) -> list[str]:
             notes.append("类别分布不均会影响少数类识别，后续应补充少数类样本并评估按类别指标。")
         if "样本规模较小" in warning:
             notes.append("样本规模较小会放大数据划分的偶然性，后续应扩大样本并使用交叉验证或多组随机划分。")
+        if "无法读取或损坏" in warning:
+            notes.append("数据集中存在损坏图像，可能降低可用训练样本数量；后续应清理坏图并记录清洗后的数据规模。")
+        if "内容重复" in warning:
+            notes.append("数据集中存在内容重复图像，若划分不当可能导致评估虚高；后续应去重后再补充独立场景样本。")
+        if "尺寸异常" in warning:
+            notes.append("数据集中存在尺寸异常图像，统一缩放策略可能引入变形；后续应检查采集设置并评估不同缩放方案。")
     n_rows = (dataset_meta or {}).get("n_rows") or ((dataset_meta or {}).get("stats") or {}).get("n_rows")
     try:
         n_rows = int(n_rows)

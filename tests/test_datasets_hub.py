@@ -90,6 +90,18 @@ class BuiltinDemoTest(unittest.TestCase):
         self.assertEqual(meta["stats"]["duplicates"], 2)
         self.assertAlmostEqual(meta["stats"]["duplicate_rate"], 0.4)
 
+    def test_image_audit_sampling_is_stratified_by_class(self):
+        paths = []
+        for i in range(1200):
+            cls = "red" if i < 600 else "blue"
+            paths.append(Path(f"images/{cls}/{i:04d}.png"))
+        sampled = datasets_hub._sample_image_audit_paths(paths, limit=100)
+        by_class = {"red": 0, "blue": 0}
+        for path in sampled:
+            by_class[path.parts[-2]] += 1
+        self.assertEqual(len(sampled), 100)
+        self.assertEqual(by_class, {"red": 50, "blue": 50})
+
     def test_eda_generates_real_data_quality_warnings(self):
         rows = ["feature,label"]
         # 9 个重复特征样本，label 分布 7:1，模拟小样本且类别不平衡。

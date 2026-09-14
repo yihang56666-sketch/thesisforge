@@ -454,6 +454,13 @@ def _quality_warnings(meta: dict) -> list[str]:
         bad_images = int(stats.get("bad_images") or 0)
         duplicate_images = int(stats.get("duplicate_images") or 0)
         size_outliers = int(stats.get("size_outliers") or 0)
+        total_images = int(stats.get("total_images") or 0)
+        audited_images = int(stats.get("audited_images") or 0)
+        if total_images and audited_images and audited_images < total_images:
+            out.append(
+                f"为避免界面卡顿，已按类别分层抽查 {audited_images}/{total_images} 张图像；"
+                "下列图像问题数量为抽样结果，实际风险可能更高。"
+            )
         if bad_images:
             out.append(f"有 {bad_images} 张图像无法读取或损坏，训练前应删除或修复。")
         if duplicate_images:
@@ -490,12 +497,20 @@ def _quality_warnings(meta: dict) -> list[str]:
 
 def _audit_images(paths: list[Path]) -> dict:
     """检查常见图像数据问题：坏图、重复内容、异常尺寸。失败不阻断导入。"""
-    out = {"bad_images": 0, "duplicate_images": 0, "size_outliers": 0, "audited_images": len(paths)}
+    total_images = len(paths)
+    audited_paths = _sample_image_audit_paths(paths)
+    out = {
+        "bad_images": 0,
+        "duplicate_images": 0,
+        "size_outliers": 0,
+        "audited_images": len(audited_paths),
+        "total_images": total_images,
+    }
     if not paths:
         return out
     sizes: list[tuple[int, int]] = []
     hashes: dict[str, int] = {}
-    for path in paths:
+    for path in audited_paths:
         try:
             from PIL import Image
 
@@ -518,6 +533,27 @@ def _audit_images(paths: list[Path]) -> dict:
             if abs(w - median_w) / median_w > 0.5 or abs(h - median_h) / median_h > 0.5:
                 out["size_outliers"] += 1
     return out
+
+
+def _sample_image_audit_paths(paths: list[Path], limit: int = 1000) -> list[Path]:
+    """大图像集按类别目录轮询抽样，避免体检偏向最先处理的类别。"""
+    if len(paths) <= limit:
+        return list(paths)
+    buckets: dict[Path, list[Path]] = {}
+    for path in paths:
+        buckets.setdefault(path.parent, []).append(path)
+    sampled: list[Path] = []
+    while len(sampled) < limit:
+        sampled_any = False
+        for bucket in buckets.values():
+            if bucket:
+                sampled.append(bucket.pop(0))
+                sampled_any = True
+            if len(sampled) >= limit:
+                break
+        if not sampled_any:
+            break
+    return sampled
 
 
 # ---------------------------------------------------------------- 载入/导入/下载

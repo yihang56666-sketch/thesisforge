@@ -100,6 +100,21 @@ class ReportResearchDepthTest(unittest.TestCase):
 
         self.assertTrue(any("过拟合迹象" in t and "0.9900" in t and "0.8000" in t for t in texts))
 
+    def test_report_includes_image_quality_limitations(self):
+        dataset_meta = {
+            "name": "示例图像集", "columns": [], "target": "label",
+            "quality_warnings": [
+                "有 3 张图像无法读取或损坏，训练前应删除或修复。",
+                "有 2 张图像内容重复，建议在划分前去重，避免评估虚高。",
+                "有 4 张图像尺寸异常，建议统一缩放或检查原始采集设置。",
+            ],
+        }
+        texts = self._build([], dataset_meta)
+
+        self.assertTrue(any("损坏图像" in t and "可用训练样本" in t for t in texts))
+        self.assertTrue(any("内容重复图像" in t and "评估虚高" in t for t in texts))
+        self.assertTrue(any("尺寸异常图像" in t and "缩放方案" in t for t in texts))
+
     def test_report_summarizes_repeated_experiments(self):
         runs = []
         for i, acc in enumerate([0.91, 0.93, 0.95], start=1):
