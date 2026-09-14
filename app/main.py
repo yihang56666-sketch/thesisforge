@@ -616,6 +616,9 @@ def create_run(req: CreateRunReq):
         raise HTTPException(400, "时间序列预测需要表格数据（CSV，含目标列）")
     if task == "image_classification" and ds_meta["type"] != "image":
         raise HTTPException(400, "该任务需要图像数据集（zip，类别文件夹结构）")
+    if task == "object_detection":
+        if ds_meta.get("task") != "object_detection":
+            raise HTTPException(400, "目标检测需要 YOLO 格式数据集（zip：images/ + labels/ 或 data.yaml）")
     if task == "text_classification":
         if ds_meta["type"] != "tabular":
             raise HTTPException(400, "文本分类需要包含文本列与标签列的表格数据(CSV)")
@@ -623,8 +626,16 @@ def create_run(req: CreateRunReq):
             raise HTTPException(400, "请在高级选项中选择文本列与标签列")
 
     engine = spec.get("engine") or "sklearn"
-    script = "train_torch.py" if engine == "torch" else "train_sklearn.py"
-    if engine == "torch":
+    script = {"torch": "train_torch.py", "ultralytics": "train_detection.py"}.get(engine, "train_sklearn.py")
+    if engine == "ultralytics":
+        try:
+            has_ulti = importlib.util.find_spec("ultralytics") is not None
+        except (ImportError, ValueError):
+            has_ulti = False
+        if not has_ulti:
+            raise HTTPException(400, "未检测到 Ultralytics，无法进行目标检测训练。"
+                                    "请先安装：pip install ultralytics")
+    elif engine == "torch":
         # 神经网络训练依赖 PyTorch；离线整合包与精简 EXE 可能未安装，提前给出可操作的提示
         try:
             has_torch = importlib.util.find_spec("torch") is not None
@@ -634,8 +645,8 @@ def create_run(req: CreateRunReq):
             raise HTTPException(400, "未检测到 PyTorch，无法进行神经网络训练。请运行「安装图像训练-CPU版.bat」"
                                     "（或 GPU 版），或改用传统机器学习模型。")
     # 标签列兜底：未指定时使用最后一列
-    target = req.target if task != "image_classification" else None
-    if task != "image_classification" and not target:
+    target = req.target if task not in ("image_classification", "object_detection") else None
+    if task not in ("image_classification", "object_detection") and not target:
         if ds_meta.get("target"):
             target = ds_meta["target"]
         elif ds_meta.get("columns"):

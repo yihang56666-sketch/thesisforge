@@ -405,7 +405,9 @@ async function pageTrain() {
   }
   const ds = state.datasets.find((d) => d.id === t.datasetId);
   if (ds) {
-    const tasks = ds.type === "image" ? ["image_classification"] : ["tabular_classification", "tabular_regression", "text_classification", "time_series_forecasting"];
+    const tasks = ds.type === "image"
+      ? (ds.task === "object_detection" ? ["object_detection"] : ["image_classification"])
+      : ["tabular_classification", "tabular_regression", "text_classification", "time_series_forecasting"];
     if (!tasks.includes(t.task)) t.task = ds.task && tasks.includes(ds.task) ? ds.task : tasks[0];
   }
   const taskDef = state.models[t.task];

@@ -294,6 +294,43 @@ CATALOG: dict = {
             },
         },
     },
+    "object_detection": {
+        "label": "图像 · 目标检测",
+        "needs_target": False,
+        "needs_text_column": False,
+        "models": {
+            "yolov8n": {
+                "label": "YOLOv8n 目标检测",
+                "desc": "Ultralytics YOLOv8 nano，最轻量的检测模型，训练快，适合小数据集与入门毕设。",
+                "engine": "ultralytics",
+                "params": {
+                    "epochs": {"type": "int", "default": 50, "min": 1, "max": 500, "label": "训练轮数"},
+                    "imgsz": {"type": "int", "default": 640, "min": 160, "max": 1280, "label": "图像尺寸"},
+                    "batch_size": {"type": "int", "default": 16, "min": 1, "max": 128, "label": "批大小"},
+                    "lr0": {"type": "float", "default": 0.01, "min": 0.00001, "max": 0.1, "label": "初始学习率"},
+                    "patience": {"type": "int", "default": 20, "min": 0, "max": 200, "label": "早停耐心(0=关闭)"},
+                    "seed": {"type": "int", "default": 42, "min": 0, "max": 999999, "label": "随机种子"},
+                    "device": {"type": "choice", "default": "auto",
+                               "options": ["auto", "cpu", "gpu"], "label": "训练设备"},
+                },
+            },
+            "yolov8s": {
+                "label": "YOLOv8s 目标检测",
+                "desc": "Ultralytics YOLOv8 small，比 nano 容量更大，中小型检测数据集首选。",
+                "engine": "ultralytics",
+                "params": {
+                    "epochs": {"type": "int", "default": 50, "min": 1, "max": 500, "label": "训练轮数"},
+                    "imgsz": {"type": "int", "default": 640, "min": 160, "max": 1280, "label": "图像尺寸"},
+                    "batch_size": {"type": "int", "default": 16, "min": 1, "max": 128, "label": "批大小"},
+                    "lr0": {"type": "float", "default": 0.01, "min": 0.00001, "max": 0.1, "label": "初始学习率"},
+                    "patience": {"type": "int", "default": 20, "min": 0, "max": 200, "label": "早停耐心(0=关闭)"},
+                    "seed": {"type": "int", "default": 42, "min": 0, "max": 999999, "label": "随机种子"},
+                    "device": {"type": "choice", "default": "auto",
+                               "options": ["auto", "cpu", "gpu"], "label": "训练设备"},
+                },
+            },
+        },
+    },
 }
 
 

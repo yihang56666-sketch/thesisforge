@@ -316,7 +316,61 @@ def run_eda(ds_id: str) -> list[str]:
     eda_dir.mkdir(exist_ok=True)
     files: list[str] = []
 
-    if meta["type"] == "image":
+    if meta.get("task") == "object_detection":
+        root = dataset_dir(ds_id)
+        yaml_path = None
+        for name in ("data.yaml", "data.yml"):
+            p = root / name
+            if p.exists():
+                yaml_path = p
+                break
+        if yaml_path is None:
+            for p in sorted(root.rglob("data.y*ml")):
+                yaml_path = p
+                break
+        classes: list[str] = []
+        if yaml_path is not None:
+            try:
+                import yaml
+                spec = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+                names = spec.get("names") or {}
+                if isinstance(names, dict):
+                    classes = [names[k] for k in sorted(names)]
+                elif isinstance(names, list):
+                    classes = [str(n) for n in names]
+            except Exception as e:
+                # data.yaml 缺失或格式异常时降级为按标签文件统计，不阻断导入
+                print(f"[eda] data.yaml 解析跳过: {e}")
+        img_root = root / "images"
+        img_files = sorted(
+            p for p in (img_root.rglob("*") if img_root.is_dir() else root.rglob("*"))
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+        )
+        box_counts: dict[str, int] = {}
+        labels_root = root / "labels"
+        if labels_root.is_dir():
+            for lf in labels_root.rglob("*.txt"):
+                cls_names = classes or []
+                for line in lf.read_text(encoding="utf-8").splitlines():
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    try:
+                        ci = int(parts[0])
+                    except ValueError:
+                        continue
+                    key = cls_names[ci] if ci < len(cls_names) else str(ci)
+                    box_counts[key] = box_counts.get(key, 0) + 1
+        if box_counts:
+            files.append(Path(plots.plot_class_balance(box_counts, eda_dir / "class_balance.png")).name)
+        meta["n_images"] = len(img_files)
+        meta["n_classes"] = len(classes) if classes else len(box_counts)
+        meta["classes"] = classes or list(box_counts)
+        meta["n_boxes"] = int(sum(box_counts.values()))
+        meta["stats"] = {"box_counts": box_counts}
+        meta["n_rows"] = 0
+        meta["columns"] = []
+    elif meta["type"] == "image":
         img_root = ds_dir / "images"
         counts, paths, labels = {}, [], []
         for cls_dir in sorted(img_root.iterdir()):
@@ -449,6 +503,31 @@ def _safe_extract_zip(zf_source, dest: Path) -> None:
                 shutil.copyfileobj(src, out)
 
 
+def _yolo_root(staging: Path) -> Path | None:
+    """在解压目录里定位 YOLO 数据集根（含 data.yaml 或 images/+labels/）。
+
+    zip 常见两种组织：根目录直接是数据集，或包了一层同名文件夹。
+    返回数据集根目录；不是 YOLO 格式时返回 None。
+    """
+    def _is_yolo(root: Path) -> bool:
+        if (root / "data.yaml").exists() or (root / "data.yml").exists():
+            return True
+        if (root / "images").is_dir() and (root / "labels").is_dir():
+            return True
+        for sub in ("train", "valid", "val", "test"):
+            if (root / "images" / sub).is_dir() and (root / "labels" / sub).is_dir():
+                return True
+        return False
+
+    if staging.exists():
+        if _is_yolo(staging):
+            return staging
+        dirs = [d for d in staging.iterdir() if d.is_dir()]
+        if len(dirs) == 1 and _is_yolo(dirs[0]):
+            return dirs[0]
+    return None
+
+
 def import_bytes(filename: str, content: bytes) -> dict:
     """兼容入口：内存字节流导入。新代码优先用 import_path，避免整包驻留内存。"""
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -498,20 +577,39 @@ def import_path(filename: str, stored: Path) -> dict:
         df = None  # 提前释放，EDA 阶段不必再持有整表
         _save_meta(ds_dir, meta)
     elif suffix == ".zip":
-        img_root = ds_dir / "images"
+        staging = ds_dir / "_extract"
         try:
-            _safe_extract_zip(stored, img_root)
+            _safe_extract_zip(stored, staging)
         except Exception as e:
             _fail(f"zip 解压失败: {e}")
-        classes = [d.name for d in sorted(img_root.iterdir()) if d.is_dir()] if img_root.exists() else []
-        if len(classes) < 2:
-            _fail("zip 内需要按『类别文件夹/图片』组织，且至少 2 个类别")
-        meta = {
-            "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "image",
-            "task": "image_classification", "target": None, "columns": [],
-            "created_at": _now(), "desc": f"图像分类数据集，{len(classes)} 个类别。",
-        }
-        _save_meta(ds_dir, meta)
+        root = _yolo_root(staging)
+        if root is not None:
+            # YOLO 格式：images/ + labels/（或 data.yaml），保持原结构
+            for child in staging.iterdir():
+                shutil.move(str(child), ds_dir / child.name)
+            staging.rmdir()
+            meta = {
+                "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "image",
+                "task": "object_detection", "target": None, "columns": [],
+                "created_at": _now(),
+                "desc": f"YOLO 目标检测数据集，{sum(1 for _ in root.rglob('*.png')) + sum(1 for _ in root.rglob('*.jpg'))} 张图。",
+            }
+            _save_meta(ds_dir, meta)
+        else:
+            img_root = ds_dir / "images"
+            classes = [d.name for d in sorted(staging.iterdir()) if d.is_dir()] if staging.exists() else []
+            if len(classes) < 2:
+                _fail("zip 内需要按『类别文件夹/图片』组织，且至少 2 个类别；"
+                      "目标检测请使用 YOLO 格式（images/ + labels/ 或 data.yaml）")
+            if img_root.exists():
+                shutil.rmtree(img_root)
+            shutil.move(str(staging), str(img_root))
+            meta = {
+                "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "image",
+                "task": "image_classification", "target": None, "columns": [],
+                "created_at": _now(), "desc": f"图像分类数据集，{len(classes)} 个类别。",
+            }
+            _save_meta(ds_dir, meta)
     else:
         _fail("仅支持 .csv/.xlsx/.xls 表格或 .zip 图像数据集")
     stored.unlink(missing_ok=True)
