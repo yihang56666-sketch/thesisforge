@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """构建 Windows 离线整合包：内嵌 Python 3.13 + 预装依赖 + 源码，解压即用。
 
-产物: dist/ThesisForge-v0.4.2-win64-offline.zip
+产物: dist/ThesisForge-v0.4.3-win64-offline.zip
 安全约定：
 - 下载地址为硬编码的 python.org 官方 https 直链，经 validate_public_http_url
   域名白名单校验后，由 app.datasets_hub._fetch 执行（内含 SSRF 逐跳校验：
@@ -20,11 +20,12 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from app.config import APP_VERSION  # noqa: E402
 from app.datasets_hub import _fetch  # noqa: E402
 from app.security import validate_public_http_url  # noqa: E402
 
 DIST = ROOT / "dist"
-PKG = DIST / "ThesisForge-v0.4.2-win64"
+PKG = DIST / f"ThesisForge-v{APP_VERSION}-win64"
 RT = PKG / "runtime"
 PY_EMBED_URL = "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-amd64.zip"
 ALLOWED_HOST = "www.python.org"
@@ -117,7 +118,7 @@ def main():
          "runtime\\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126\r\n"
          "pause\r\n").encode("utf-8"))
     (PKG / "使用说明.txt").write_text(
-        """毕设工坊 ThesisForge v0.4.2 — Windows 离线整合包
+        f"""毕设工坊 ThesisForge v{APP_VERSION} — Windows 离线整合包
 ================================================
 
 【快速开始】
@@ -154,7 +155,7 @@ def main():
 
     # 5. 压缩
     step("压缩为 zip ...")
-    zpath = DIST / "ThesisForge-v0.4.2-win64-offline.zip"
+    zpath = DIST / f"ThesisForge-v{APP_VERSION}-win64-offline.zip"
     if zpath.exists():
         zpath.unlink()
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:

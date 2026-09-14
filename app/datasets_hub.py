@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from .config import DATASETS_DIR, UPLOADS_DIR
 from .config import APP_VERSION
@@ -316,7 +317,7 @@ def run_eda(ds_id: str) -> list[str]:
     eda_dir.mkdir(exist_ok=True)
     files: list[str] = []
 
-    if meta.get("task") == "object_detection":
+    if meta.get("task") in ("object_detection", "semantic_segmentation"):
         root = dataset_dir(ds_id)
         yaml_path = None
         for name in ("data.yaml", "data.yml"):
@@ -588,11 +589,21 @@ def import_path(filename: str, stored: Path) -> dict:
             for child in staging.iterdir():
                 shutil.move(str(child), ds_dir / child.name)
             staging.rmdir()
+            moved_root = ds_dir if root == staging else ds_dir / root.name
+            task = "object_detection"
+            try:
+                yaml_path = next(p for p in (moved_root / "data.yaml", moved_root / "data.yml") if p.exists())
+                spec = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+                if str(spec.get("task", "")).lower() in ("segment", "segmentation"):
+                    task = "semantic_segmentation"
+            except Exception:
+                task = "object_detection"
             meta = {
                 "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "image",
-                "task": "object_detection", "target": None, "columns": [],
+                "task": task, "target": None, "columns": [],
                 "created_at": _now(),
-                "desc": f"YOLO 目标检测数据集，{sum(1 for _ in root.rglob('*.png')) + sum(1 for _ in root.rglob('*.jpg'))} 张图。",
+                "desc": f"YOLO {'实例分割' if task == 'semantic_segmentation' else '目标检测'}数据集，"
+                        f"{sum(1 for _ in moved_root.rglob('*.png')) + sum(1 for _ in moved_root.rglob('*.jpg'))} 张图。",
             }
             _save_meta(ds_dir, meta)
         else:

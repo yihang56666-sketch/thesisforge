@@ -12,6 +12,7 @@ from unittest import mock
 from PIL import Image, ImageDraw
 
 from app import datasets_hub, runner
+from app.train_detection import yolo_weights
 
 
 def _png_bytes(img: Image.Image) -> bytes:
@@ -53,6 +54,42 @@ class DetectionImportTest(unittest.TestCase):
         self.assertGreater(meta.get("n_boxes", 0), 0)
         eda = meta.get("eda_files") or []
         self.assertIn("class_balance.png", eda)
+
+
+class SegmentationImportTest(unittest.TestCase):
+    def test_import_yolo_segment_zip(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for split, n in (("train", 3), ("val", 2)):
+                for i in range(n):
+                    img = Image.new("RGB", (64, 64), (30, 34, 40))
+                    zf.writestr(f"images/{split}/{i:03d}.png", _png_bytes(img))
+                    zf.writestr(f"labels/{split}/{i:03d}.txt", "0 0.2 0.2 0.5 0.2 0.5 0.6\n")
+            zf.writestr("data.yaml",
+                        "task: segment\npath: .\ntrain: images/train\nval: images/val\n"
+                        "names:\n  0: target\n")
+        meta = datasets_hub.import_bytes("seg-demo.zip", buf.getvalue())
+        self.assertEqual(meta["task"], "semantic_segmentation")
+        self.assertEqual(meta["n_images"], 5)
+        self.assertEqual(meta["classes"], ["target"])
+
+
+class DetectionWeightMappingTest(unittest.TestCase):
+    def test_model_weight_mapping(self):
+        cases = {
+            "yolov8n": "yolov8n.pt",
+            "yolov8s": "yolov8s.pt",
+            "yolov8n-seg": "yolov8n-seg.pt",
+            "yolov8s-seg": "yolov8s-seg.pt",
+            "rtdetr-l": "rtdetr-l.pt",
+        }
+        for model, expected in cases.items():
+            with self.subTest(model=model):
+                self.assertEqual(yolo_weights(model), expected)
+
+    def test_unknown_model_is_rejected(self):
+        with self.assertRaises(ValueError):
+            yolo_weights("unknown")
 
 
 class DetectionApiTest(unittest.TestCase):

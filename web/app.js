@@ -113,6 +113,13 @@ function groupBadge(g) {
   return `<span class="badge ${d.cls}">${esc(d.label)}</span>`;
 }
 
+function datasetTaskLabel(d) {
+  if (d.type !== "image") return "表格";
+  if (d.task === "object_detection") return "检测";
+  if (d.task === "semantic_segmentation") return "分割";
+  return "图像";
+}
+
 /* 折线图（纯 SVG） */
 function lineChart(series, opts = {}) {
   const pts = series.flatMap((s) => s.points);
@@ -299,7 +306,7 @@ async function pageDatasets() {
       <div class="panel">${state.datasets.length ? `
         <table class="data"><thead><tr><th>名称</th><th>类型</th><th>规模</th><th>来源</th><th>载入时间</th><th></th></tr></thead>
         <tbody>${state.datasets.map((d) => `<tr class="clickable" data-ds="${esc(d.id)}">
-          <td><b>${esc(d.name)}</b></td><td>${d.type === "image" ? "图像" : "表格"}</td>
+          <td><b>${esc(d.name)}</b></td><td>${esc(datasetTaskLabel(d))}</td>
           <td>${d.type === "image" ? (d.n_images || "?") + " 张 / " + (d.n_classes || "?") + " 类" : esc((d.n_rows || "?") + " 行 × " + (d.columns || []).length + " 列")}</td>
           <td class="muted">${{ builtin: "内置", imported: "导入", download: "下载" }[d.source] || d.source}</td>
           <td class="muted small">${esc(d.created_at || "")}</td>
@@ -406,7 +413,7 @@ async function pageTrain() {
   const ds = state.datasets.find((d) => d.id === t.datasetId);
   if (ds) {
     const tasks = ds.type === "image"
-      ? (ds.task === "object_detection" ? ["object_detection"] : ["image_classification"])
+      ? (ds.task === "object_detection" ? ["object_detection"] : ds.task === "semantic_segmentation" ? ["semantic_segmentation"] : ["image_classification"])
       : ["tabular_classification", "tabular_regression", "text_classification", "time_series_forecasting"];
     if (!tasks.includes(t.task)) t.task = ds.task && tasks.includes(ds.task) ? ds.task : tasks[0];
   }
@@ -437,10 +444,11 @@ async function pageTrain() {
     <div class="panel">
       <div class="form-grid">
         <div class="form-row"><label>数据集</label>
-          <select id="tr-ds">${state.datasets.map((d) => `<option value="${esc(d.id)}" ${d.id === t.datasetId ? "selected" : ""}>${esc(d.name)}（${d.type === "image" ? "图像" : "表格"}）</option>`).join("") || "<option>请先到数据集页载入</option>"}</select></div>
+          <select id="tr-ds">${state.datasets.map((d) => `<option value="${esc(d.id)}" ${d.id === t.datasetId ? "selected" : ""}>${esc(d.name)}（${esc(datasetTaskLabel(d))}）</option>`).join("") || "<option>请先到数据集页载入</option>"}</select></div>
         <div class="form-row"><label>任务类型</label>
           <select id="tr-task">${Object.entries(state.models).filter(([k]) => {
             if (ds && ds.task === "object_detection") return k === "object_detection";
+            if (ds && ds.task === "semantic_segmentation") return k === "semantic_segmentation";
             return (ds && ds.type === "image") === (k === "image_classification");
           })
             .map(([k, v]) => `<option value="${esc(k)}" ${k === t.task ? "selected" : ""}>${esc(v.label)}</option>`).join("")}</select></div>

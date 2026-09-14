@@ -616,9 +616,10 @@ def create_run(req: CreateRunReq):
         raise HTTPException(400, "时间序列预测需要表格数据（CSV，含目标列）")
     if task == "image_classification" and ds_meta["type"] != "image":
         raise HTTPException(400, "该任务需要图像数据集（zip，类别文件夹结构）")
-    if task == "object_detection":
-        if ds_meta.get("task") != "object_detection":
-            raise HTTPException(400, "目标检测需要 YOLO 格式数据集（zip：images/ + labels/ 或 data.yaml）")
+    if task in ("object_detection", "semantic_segmentation"):
+        if ds_meta.get("task") != task:
+            kind = "实例分割" if task == "semantic_segmentation" else "目标检测"
+            raise HTTPException(400, f"{kind}需要 YOLO 格式数据集（zip：images/ + labels/ 或 data.yaml）")
     if task == "text_classification":
         if ds_meta["type"] != "tabular":
             raise HTTPException(400, "文本分类需要包含文本列与标签列的表格数据(CSV)")
@@ -633,7 +634,7 @@ def create_run(req: CreateRunReq):
         except (ImportError, ValueError):
             has_ulti = False
         if not has_ulti:
-            raise HTTPException(400, "未检测到 Ultralytics，无法进行目标检测训练。"
+            raise HTTPException(400, "未检测到 Ultralytics，无法进行检测/分割训练。"
                                     "请先安装：pip install ultralytics")
     elif engine == "torch":
         # 神经网络训练依赖 PyTorch；离线整合包与精简 EXE 可能未安装，提前给出可操作的提示

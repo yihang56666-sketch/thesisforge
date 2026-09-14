@@ -27,7 +27,7 @@ STATUS_CANCELLED = "cancelled"
 
 _RUN_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 _RUNS_ROOT = str(RUNS_DIR.resolve())
-_ALLOWED_SCRIPTS = {"train_sklearn.py", "train_torch.py"}
+_ALLOWED_SCRIPTS = {"train_sklearn.py", "train_torch.py", "train_detection.py"}
 
 GROUP_BASELINE = "baseline"
 GROUP_IMPROVED = "improved"

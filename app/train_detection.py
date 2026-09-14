@@ -19,6 +19,16 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def yolo_weights(model_key: str) -> str:
+    if model_key.startswith("yolov8n"):
+        return "yolov8n.pt" if "-seg" not in model_key else "yolov8n-seg.pt"
+    if model_key.startswith("yolov8s"):
+        return "yolov8s.pt" if "-seg" not in model_key else "yolov8s-seg.pt"
+    if model_key.startswith("rtdetr"):
+        return f"{model_key}.pt"
+    raise ValueError(f"不支持的检测/分割模型: {model_key}")
+
+
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
@@ -84,9 +94,14 @@ def main() -> int:
         data_yaml = materialize_data_yaml(dataset_dir, find_data_yaml(dataset_dir), run_dir)
         log(f"数据配置: {data_yaml}（path 已重写为数据集绝对路径）")
 
-        from ultralytics import YOLO
+        if model_key.startswith("rtdetr"):
+            from ultralytics import RTDETR
+            model = RTDETR(weights)
+        else:
+            from ultralytics import YOLO
+            model = YOLO(weights)
 
-        weights = "yolov8n.pt" if "n" in model_key else "yolov8s.pt"
+        weights = yolo_weights(model_key)
         device = params.get("device", "auto")
         if device == "auto":
             import torch
@@ -96,7 +111,6 @@ def main() -> int:
         log(f"设备: {device}")
 
         emit({"type": "stage", "name": "train_start"})
-        model = YOLO(weights)
         model.train(
             data=str(data_yaml),
             epochs=int(params.get("epochs", 50)),

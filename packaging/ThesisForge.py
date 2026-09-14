@@ -43,7 +43,7 @@ def _worker(argv: list[str]) -> int:
     """在同一 EXE 进程内以 __main__ 方式运行 app.train_* 训练脚本。"""
     import runpy
 
-    allowed = {"train_sklearn.py", "train_torch.py"}
+    allowed = {"train_sklearn.py", "train_torch.py", "train_detection.py"}
     name = argv[0] if argv else ""
     if name not in allowed:
         print(f"[ThesisForge] 非法的训练模块参数：{name!r}", file=sys.stderr)

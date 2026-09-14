@@ -352,6 +352,11 @@ def build_report(
             if spec and spec["model"] not in seen:
                 seen.add(spec["model"])
                 _para(doc, f"{spec['label']}：{spec['desc']}", indent=False)
+        if any(r["config"].get("task") in ("object_detection", "semantic_segmentation") for r in runs):
+            _para(doc, "检测与分割实验使用 Ultralytics 训练管线：输入图像按统一尺寸缩放，"
+                       "训练阶段应用几何与颜色增强；评价指标统一采用 mAP50 与 mAP50-95，"
+                       "实例分割另按 mask 口径计算精确率与召回率。验证集用于模型选择，"
+                       "最终结果不在训练过程中反复使用。", indent=False)
 
     # ---------------- 第三章 数据与预处理
     _heading(doc, "第三章  数据集与预处理", 1)
@@ -376,7 +381,15 @@ def build_report(
                     fi += 1
                     _figure(doc, eda / fname, f"图 3-{fi}  {cap}")
         _heading(doc, "3.3  预处理与数据划分", 2)
-        _para(doc, "数值特征经中位数填充与标准化处理，类别特征经众数填充与独热编码；"
+        has_vision = any(r["config"].get("task") in ("image_classification", "object_detection", "semantic_segmentation") for r in runs)
+        if has_vision:
+            _para(doc, "图像任务先划分为训练集、验证集与测试集：权重在训练集上更新，"
+                       "模型与超参数依据验证集选择，测试集仅在最终评估时使用一次。"
+                       "分类模型按图像尺寸缩放并使用数据增强；检测与分割模型采用 YOLO 格式标注，"
+                       "目标检测使用矩形框（bbox），实例分割使用多边形/掩码（mask）。"
+                       "所有实验固定随机种子以保证可复现。")
+        else:
+            _para(doc, "数值特征经中位数填充与标准化处理，类别特征经众数填充与独热编码；"
                    "数据先按分层抽样划分为训练集与测试集，再在训练集内部拟合填充值与标准化参数"
                    "（填充器、标准化器均作为 Pipeline 的一部分只在训练折/训练集上 fit），避免数据泄漏。"
                    "图像任务进一步划分为训练集、验证集与测试集：权重在训练集上更新，"
@@ -442,6 +455,13 @@ def build_report(
                            ("pred_vs_true.png", "预测值与真实值对比"), ("feature_importance.png", "特征重要性")]:
             if _figure(doc, rd / fname, f"图 4-{fig_no + 1}  {cap}（{model_label}）"):
                 fig_no += 1
+        if cfg.get("task") in ("object_detection", "semantic_segmentation"):
+            for fname, cap in [("results.png", "训练/验证损失与指标曲线"),
+                               ("confusion_matrix_normalized.png", "归一化混淆矩阵"),
+                               ("val_batch0_pred.jpg", "验证集预测可视化"),
+                               ("val_batch1_pred.jpg", "验证集预测可视化")]:
+                if _figure(doc, rd / fname, f"图 4-{fig_no + 1}  {cap}（{model_label}）"):
+                    fig_no += 1
         if drafts.get(f"analysis:{r['run_id']}"):
             _md_to_paras(doc, drafts[f"analysis:{r['run_id']}"])
         elif s.get("metrics"):

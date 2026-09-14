@@ -127,6 +127,7 @@ function wizardTaskOptions(ds, catalog) {
   if (!ds) return keys;
   if (ds.type === "image") {
     if (ds.task === "object_detection" && keys.includes("object_detection")) return ["object_detection"];
+    if (ds.task === "semantic_segmentation" && keys.includes("semantic_segmentation")) return ["semantic_segmentation"];
     return keys.includes("image_classification") ? ["image_classification"] : keys;
   }
   if (ds.task && keys.includes(ds.task)) return [ds.task];
@@ -237,7 +238,7 @@ function wizardDatasetPane(dsR) {
       <div class="table-scroll"><table class="data"><thead><tr><th>名称</th><th>类型</th><th>规模</th><th>状态</th></tr></thead>
       <tbody>${datasets.map((d) => `<tr>
         <td><b>${esc(d.name)}</b></td>
-        <td>${d.type === "image" ? "图像" : "表格"}</td>
+        <td>${d.type === "image" ? (d.task === "object_detection" ? "检测" : d.task === "semantic_segmentation" ? "分割" : "图像") : "表格"}</td>
         <td>${d.type === "image" ? (d.n_images || "?") + " 张 / " + (d.n_classes || "?") + " 类" : esc((d.n_rows || "?") + " 行 × " + (d.columns || []).length + " 列")}</td>
         <td><span class="status done">已就绪</span></td></tr>`).join("")}</tbody></table></div>`
       : `<div class="empty">还没有数据集。先载入一个内置数据集，或到「数据集」页上传你自己的文件。</div>`}
