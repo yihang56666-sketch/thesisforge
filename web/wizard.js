@@ -69,7 +69,29 @@ const WIZARD_STEPS = [
   },
 ];
 
-const WIZARD_DIRECTIONS = ["图像分类", "文本分类", "表格预测", "算法优化与消融", "其他"];
+const WIZARD_DIRECTIONS = ["图像分类", "目标检测", "语义分割", "文本分类", "表格预测", "时间序列预测", "算法优化与消融", "其他"];
+
+function wizardInferDirection(task, type) {
+  if (type === "image") {
+    if (task === "object_detection") return "目标检测";
+    if (task === "semantic_segmentation") return "语义分割";
+    return "图像分类";
+  }
+  if (task === "text_classification") return "文本分类";
+  if (task === "time_series_forecasting") return "时间序列预测";
+  if (task === "tabular_regression") return "表格预测";
+  if (task === "tabular_classification") return "表格预测";
+  return "其他";
+}
+
+function wizardTaskType(task, type) {
+  return type || (String(task || "").startsWith("image") ? "image" : "tabular");
+}
+
+function wizardDirectionMatches(direction, task, type) {
+  const inferred = wizardInferDirection(task, type);
+  return direction === "其他" || direction === "算法优化与消融" || direction === inferred;
+}
 
 const DATA_PREP_FIELDS = [
   { key: "missing", label: "缺失值处理", kind: "choice", options: [["impute", "自动填充"], ["drop", "删除含缺失行"], ["keep", "保留缺失"]], note: "样本少时优先填充而不是删行" },
@@ -142,7 +164,9 @@ function wizardDatasetBar(dsR) {
   const sizeText = ds.type === "image"
     ? `${ds.n_images || "?"} 张 / ${ds.n_classes || "?"} 类`
     : `${ds.n_rows || "?"} 行 × ${(ds.columns || []).length || "?"} 列`;
-  return `<div class="wz-ds-current"><span class="tag">${ds.type === "image" ? "图像" : "表格"}</span><div class="name">${esc(ds.name)}</div><div class="desc">规模：${esc(sizeText)}</div></div>`;
+  const matched = wizardDirectionMatches((wizardState.project || {}).direction, ds.task, ds.type);
+  const warn = matched ? "" : `<div class="muted small mt4">注意：这个数据集和当前立项方向不一致，建议回步骤 2 重新选择，或在步骤 1 调整研究大类。</div>`;
+  return `<div class="wz-ds-current ${matched ? "" : "warn"}"><span class="tag">${ds.type === "image" ? "图像" : "表格"}</span><div class="name">${esc(ds.name)}</div><div class="desc">规模：${esc(sizeText)}</div>${warn}</div>`;
 }
 
 async function loadWizard() {
@@ -220,7 +244,13 @@ function wizardProjectFields() {
 function wizardDatasetPane(dsR) {
   const builtin = (dsR && dsR.builtin) || [];
   const datasets = (dsR && dsR.datasets) || [];
-  const taskName = (t) => (t === "image_classification" ? "图像" : t === "text_classification" ? "文本" : "表格");
+  const direction = (wizardState.project || {}).direction;
+  const taskName = (t) => {
+    if (t === "object_detection") return "目标检测";
+    if (t === "semantic_segmentation") return "语义分割";
+    if (t === "time_series_forecasting") return "时间序列";
+    return t === "image_classification" ? "图像" : t === "text_classification" ? "文本" : "表格";
+  };
   return `
     <b class="t">内置数据集（可直接载入，自动完成 EDA 与 AI 解读）</b>
     <div class="wz-ds-grid">
@@ -228,7 +258,7 @@ function wizardDatasetPane(dsR) {
         <div class="wz-ds-card">
           <div class="name">${esc(b.name)}</div>
           <div class="desc">${esc(b.desc || "")}</div>
-          <div class="foot"><span class="tag">${taskName(b.task)}</span>
+          <div class="foot"><span class="tag ${wizardDirectionMatches(direction, b.task, wizardTaskType(b.task, b.type)) ? "" : "warn"}">${taskName(b.task)} · ${wizardDirectionMatches(direction, b.task, wizardTaskType(b.task, b.type)) ? "匹配" : "不匹配"}</span>
           <button class="btn small accent" data-builtin="${esc(b.key)}">载入</button></div>
         </div>`).join("")}
     </div>
@@ -240,7 +270,7 @@ function wizardDatasetPane(dsR) {
         <td><b>${esc(d.name)}</b></td>
         <td>${d.type === "image" ? (d.task === "object_detection" ? "检测" : d.task === "semantic_segmentation" ? "分割" : "图像") : "表格"}</td>
         <td>${d.type === "image" ? (d.n_images || "?") + " 张 / " + (d.n_classes || "?") + " 类" : esc((d.n_rows || "?") + " 行 × " + (d.columns || []).length + " 列")}</td>
-        <td><span class="status done">已就绪</span></td></tr>`).join("")}</tbody></table></div>`
+        <td><span class="status done">已就绪</span>${datasetQualityHtml(d, true)}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="empty">还没有数据集。先载入一个内置数据集，或到「数据集」页上传你自己的文件。</div>`}
     <div class="row-flex mt14">
       <button class="btn" data-wgoto-page="#/datasets">去数据集页上传 / 下载</button>
@@ -579,7 +609,16 @@ function bindWizardPage(step, stepNo, dsR, modelsR) {
       b.textContent = "载入中…";
       try {
         const r = await api("/api/datasets/builtin", { method: "POST", body: { name: b.dataset.builtin } });
-        toast(`已载入：${r.dataset.name}`, "success");
+        const ds = r.dataset || {};
+        const inferred = wizardInferDirection(ds.task, ds.type);
+        const direction = (wizardState.project || {}).direction;
+        if (!wizardDirectionMatches(direction, ds.task, ds.type)) {
+          wizardState.project.direction = inferred;
+          await saveWizard();
+          toast(`已载入，并把研究大类调整为「${inferred}」以匹配数据集`, "success");
+        } else {
+          toast(`已载入：${r.dataset.name}`, "success");
+        }
         renderWizard().catch((e) => toast(e.message, "error"));
       } catch (e) {
         toast(e.message, "error");

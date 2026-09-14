@@ -145,20 +145,6 @@ def _three_line_table(doc: Document, headers: list[str], rows: list[list],
         _font(run, east="宋体", size=10.5, bold=False)
     t = doc.add_table(rows=1 + len(rows), cols=len(headers))
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
-    # 清空所有边框，再逐条加三线
-    tbl = t._tbl
-    tblPr = tbl.tblPr
-    borders = OxmlElement("w:tblBorders")
-    for edge, sz in (("top", "12"), ("bottom", "12"), ("left", "none"),
-                     ("right", "none"), ("insideH", "none"), ("insideV", "none")):
-        el = OxmlElement(f"w:{edge}")
-        if sz == "none":
-            el.set(qn("w:val"), "none")
-        else:
-            el.set(qn("w:val"), "single")
-            el.set(qn("w:sz"), sz)  # 单位 1/8 磅：12 = 1.5 磅
-        borders.append(el)
-    tblPr.append(borders)
     for j, htext in enumerate(headers):
         cell = t.rows[0].cells[j]
         cell.text = ""
@@ -169,6 +155,10 @@ def _three_line_table(doc: Document, headers: list[str], rows: list[list],
         # 栏目线：表头行下边框 0.75 磅
         tcPr = cell._tc.get_or_add_tcPr()
         tcB = OxmlElement("w:tcBorders")
+        top = OxmlElement("w:top")
+        top.set(qn("w:val"), "single")
+        top.set(qn("w:sz"), "12")
+        tcB.append(top)
         bottom = OxmlElement("w:bottom")
         bottom.set(qn("w:val"), "single")
         bottom.set(qn("w:sz"), "6")
@@ -182,7 +172,14 @@ def _three_line_table(doc: Document, headers: list[str], rows: list[list],
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER if j > 0 else WD_ALIGN_PARAGRAPH.LEFT
             run = p.add_run("" if v is None else str(v))
             _font(run, east="宋体", size=10.5)
-    doc.add_paragraph()
+            if i == len(rows):
+                tcPr = cell._tc.get_or_add_tcPr()
+                tcB = OxmlElement("w:tcBorders")
+                bottom = OxmlElement("w:bottom")
+                bottom.set(qn("w:val"), "single")
+                bottom.set(qn("w:sz"), "12")
+                tcB.append(bottom)
+                tcPr.append(tcB)
 
 
 def _field(p, instr: str, hint: str) -> None:
@@ -256,7 +253,7 @@ def _abstract_text(title: str, dataset_meta: dict | None, runs: list[dict]) -> s
             result = (f"基线模型{base_label}的{base_name}为 {base_value:.4f}，"
                       f"改进模型{imp_label}的{imp_name}为 {imp_value:.4f}。")
     else:
-        run = base or improved
+        run = base or improved or runs[0]
         name, value = _primary_metric(run)
         source = _run_eval_source(run)
         label = (run.get("summary") or {}).get("model_label", "所选模型")
@@ -485,6 +482,347 @@ def _repeat_notes(runs: list[dict]) -> list[str]:
     return notes
 
 
+def _task_background_text(runs: list[dict]) -> str:
+    """按实验覆盖的任务类型生成更贴近选题的研究背景，而不是通用套话。"""
+    tasks = {(r.get("config") or {}).get("task") for r in runs}
+    tasks.discard(None)
+    pieces: list[str] = []
+    if "image_classification" in tasks:
+        pieces.append(
+            "在图像识别任务中，卷积神经网络和迁移学习方法已经能在中小规模数据集上取得稳定表现；"
+            "但实际系统还要求模型在类别混淆、样本不平衡和有限算力条件下保持可靠性。"
+        )
+    if "object_detection" in tasks:
+        pieces.append(
+            "目标检测同时需要判断目标是否存在并给出空间位置，评价口径也比分类更严格；"
+            "如何在轻量化网络与定位精度之间取得平衡，是应用部署中的关键问题。"
+        )
+    if "semantic_segmentation" in tasks:
+        pieces.append(
+            "语义分割关注每个像素的类别归属，常用于水域、道路、建筑轮廓等边界敏感场景；"
+            "这类任务不仅要求类别判断正确，还要求区域重叠指标达到可用水平。"
+        )
+    if "text_classification" in tasks:
+        pieces.append(
+            "文本分类需要把非结构化语言转换为可学习的向量表示，并兼顾词序、语义极性和类别均衡；"
+            "轻量神经网络和注意力机制为中小规模语料提供了可行的建模路径。"
+        )
+    if "tabular_classification" in tasks or "tabular_regression" in tasks:
+        pieces.append(
+            "表格数据具有特征语义明确、样本规模适中但分布差异大的特点；"
+            "传统机器学习模型与神经网络、集成模型的比较，能够帮助判断不同归纳偏置的适用范围。"
+        )
+    if "time_series_forecasting" in tasks:
+        pieces.append(
+            "时间序列预测依赖时间依赖性和趋势结构，随机划分会引入未来信息泄漏；"
+            "因此建模与评估必须保持时间顺序，并同时关注短期误差和长期趋势。"
+        )
+    if not pieces:
+        pieces.append(
+            "随着人工智能方法在具体应用场景中的普及，如何根据数据形式、任务目标和算力约束"
+            "选择并验证合适的模型，成为工程落地的核心问题。"
+        )
+    return " ".join(pieces)
+
+
+def _literature_review_text(runs: list[dict], dataset_meta: dict | None) -> str:
+    """按真实实验覆盖的任务族生成文献综述骨架，避免第二章只写工具栈。"""
+    if not runs:
+        return ""
+    dataset_name = (dataset_meta or {}).get("name") or "目标数据集"
+    tasks = {(r.get("config") or {}).get("task") for r in runs}
+    tasks.discard(None)
+    pieces = [
+        f"围绕{dataset_name}任务，相关研究通常沿着“特征表示—模型结构—训练策略—评价口径”四条线索展开。"
+        "早期工作更多依赖人工特征与传统分类器，近年研究则把重点转向端到端学习、迁移学习、注意力机制"
+        "以及面向具体部署约束的轻量化设计。"
+    ]
+    if "tabular_classification" in tasks or "tabular_regression" in tasks:
+        pieces.append(
+            "在表格数据分析中，逻辑回归、随机森林和梯度提升方法因可解释性与较强的小样本表现被广泛用作基线；"
+            "多层感知机等神经结构则用于探索高维特征间的非线性关系。已有实验普遍强调：划分方式、类别不平衡"
+            "和超参数选择会显著影响结论的可比性。"
+        )
+    if "image_classification" in tasks:
+        pieces.append(
+            "图像分类研究经历了从卷积特征到深度表征的演进，CNN 通过局部感受野降低图像先验建模成本，"
+            "ResNet 通过残差连接缓解深层网络的退化问题；迁移学习进一步说明在中小规模数据集上，"
+            "预训练表征加任务头部微调往往比从零训练更稳定。"
+        )
+    if "object_detection" in tasks:
+        pieces.append(
+            "目标检测研究可分为一阶段与二阶段方法：YOLO 系列强调端到端实时预测，"
+            "DETR 及其变体则将检测建模为集合预测问题，并以注意力机制改善全局关系建模。"
+            "评价研究通常同时报告 mAP50、mAP50-95、精确率与召回率，以避免只看单一阈值指标。"
+        )
+    if "semantic_segmentation" in tasks:
+        pieces.append(
+            "语义分割研究强调像素级对齐与边界保持，U-Net 及其变体通过编码器-解码器结构兼顾上下文信息"
+            "与空间细节，广泛用于水域、道路、医学影像等边界敏感场景。相关文献普遍以 IoU、Dice 与像素准确率"
+            "共同评价区域重叠和边界质量。"
+        )
+    if "text_classification" in tasks:
+        pieces.append(
+            "文本分类研究从词袋与 TF-IDF 特征发展到嵌入表示、TextCNN、循环网络与注意力结构；"
+            "轻量模型适合小语料快速验证，注意力机制则有助于捕捉长距离语义依赖。"
+            "在小样本与类别不平衡场景中，宏平均 F1 通常比准确率更能反映分类器的真实可用性。"
+        )
+    if "time_series_forecasting" in tasks:
+        pieces.append(
+            "时间序列预测研究强调时间依赖性、周期性与外部变量建模，LSTM 和 GRU 通过门控结构缓解长期依赖，"
+            "Transformer 类方法则利用注意力捕捉远距离模式。已有工作普遍指出，时间序列必须按时间顺序划分，"
+            "否则随机划分会引入未来信息并高估模型性能。"
+        )
+    pieces.append(
+        "综合已有研究可以看出，单一模型的结果难以支撑普适性结论；更可靠的路线是在同一数据划分、同一指标"
+        "体系下构造基线与改进方案，并通过消融实验定位每个组件的贡献。本文的实验设计正是围绕这一思路展开。"
+    )
+    return " ".join(pieces)
+
+
+def _research_method_text(dataset_meta: dict | None, runs: list[dict]) -> str:
+    """生成与真实数据集和实验路线一致的研究方法说明。"""
+    dataset_name = (dataset_meta or {}).get("name") or "所选数据集"
+    tasks = {(r.get("config") or {}).get("task") for r in runs}
+    tasks.discard(None)
+
+    pieces = [
+        f"本文以{dataset_name}为对象，按照“数据获取与质量控制—预处理与数据划分—模型构建与训练—"
+        "结果评估与误差分析—对比与消融验证”的路线组织研究工作。"
+    ]
+    if "tabular_classification" in tasks or "tabular_regression" in tasks:
+        pieces.append(
+            "在表格数据上，先检查缺失值、重复样本、字段类型和类别分布，再执行缺失填充、"
+            "标准化与编码处理；模型选择围绕可解释性和非线性建模能力分别构造基线与改进方案。"
+        )
+    if "image_classification" in tasks:
+        pieces.append(
+            "在图像任务上，先检查图像尺寸、类别分布和数据样例，再使用缩放、翻转、颜色扰动等"
+            "增强方法扩大有效样本变化；模型设计兼顾特征提取能力、参数规模与训练稳定性。"
+        )
+    if "object_detection" in tasks:
+        pieces.append(
+            "在目标检测任务上，采用 YOLO 格式组织图像与标注，统一输入尺寸，"
+            "并通过边界框回归、类别置信度和位置重叠指标共同评价检测结果。"
+        )
+    if "semantic_segmentation" in tasks:
+        pieces.append(
+            "在语义分割任务上，保持图像与掩码的空间对齐，统一掩码编码和颜色映射，"
+            "并通过 IoU、Dice 与像素准确率判断边界和区域重叠质量。"
+        )
+    if "text_classification" in tasks:
+        pieces.append(
+            "在文本任务上，先清洗噪声符号并统一分词方式，再构建词表或使用预训练表示；"
+            "模型设计兼顾局部词序特征、全局语义特征与类别均衡问题。"
+        )
+    if "time_series_forecasting" in tasks:
+        pieces.append(
+            "在时间序列任务上，按时间顺序构造滑动窗口并划分数据，避免随机划分引入未来信息；"
+            "模型评估同时关注短期误差、长期趋势和预测滞后。"
+        )
+
+    if any((r.get("summary") or {}).get("cv_scores") for r in runs):
+        pieces.append(
+            "实验同时使用交叉验证检查模型稳定性，避免单次划分带来的偶然波动；"
+            "多次重复实验的结果按均值与标准差汇总，作为结论可靠性的依据。"
+        )
+    else:
+        pieces.append(
+            "实验采用统一的数据划分与随机种子设置，保证训练、验证和测试过程可复现；"
+            "评估结果只使用未参与训练的样本，避免模型选择偏置。"
+        )
+    pieces.append(
+        "最终研究结果通过指标表、训练曲线、混淆矩阵或预测可视化共同核对，"
+        "既关注整体性能，也关注误差来源和模型适用条件。"
+    )
+    return "".join(pieces)
+
+
+def _evaluation_metrics_text(runs: list[dict]) -> list[str]:
+    """按真实实验任务解释评价指标与分析方法。"""
+    tasks = {(r.get("config") or {}).get("task") for r in runs}
+    tasks.discard(None)
+    notes: list[str] = []
+    if "tabular_classification" in tasks or "text_classification" in tasks:
+        notes.append(
+            "分类任务使用准确率反映整体判断正确比例，使用宏平均 F1 反映每个类别"
+            "精确率与召回率的综合表现；当类别分布不均衡时，宏平均 F1 比单一准确率更可靠。"
+        )
+    if "image_classification" in tasks:
+        notes.append(
+            "图像分类结果除准确率外，还结合混淆矩阵检查主要误分类类别，"
+            "并使用训练曲线判断模型是否稳定收敛。"
+        )
+    if "object_detection" in tasks:
+        notes.append(
+            "目标检测使用 mAP50 衡量低 IoU 阈值下的整体检测能力，使用 mAP50-95 衡量不同"
+            " IoU 阈值下的定位质量；精确率与召回率用于判断漏检和误检之间的权衡。"
+        )
+    if "semantic_segmentation" in tasks:
+        notes.append(
+            "语义分割使用 IoU 与 Dice 衡量预测区域和真实区域的重叠程度，"
+            "使用像素准确率作为补充；两者共同反映边界质量和类别区域完整性。"
+        )
+    if "time_series_forecasting" in tasks:
+        notes.append(
+            "时间序列预测使用 MAE 衡量平均偏差，使用 RMSE 强调较大误差点，"
+            "并结合预测曲线检查滞后、相位偏移和趋势误差。"
+        )
+    if "tabular_regression" in tasks:
+        notes.append(
+            "回归任务使用 MAE、RMSE 与 R² 共同解释误差大小、异常点敏感性和拟合程度，"
+            "避免只看单一指标得出片面结论。"
+        )
+    notes.append(
+        "所有指标均在未参与训练的数据上计算；验证集用于模型与超参数选择，"
+        "测试集只用于最终评估，避免反复调参造成结果高估。"
+    )
+    return notes
+
+
+def _work_summary_text(dataset_meta: dict | None, runs: list[dict]) -> str:
+    """把实验过程组织成论文式的工作总结。"""
+    dataset_name = (dataset_meta or {}).get("name") or "所选数据集"
+    task_text = {
+        "tabular_classification": "表格数据分类",
+        "tabular_regression": "表格数据回归",
+        "image_classification": "图像分类",
+        "object_detection": "目标检测",
+        "semantic_segmentation": "语义分割",
+        "text_classification": "文本分类",
+        "time_series_forecasting": "时间序列预测",
+    }
+    tasks = list(dict.fromkeys(
+        task_text.get((r.get("config") or {}).get("task")) for r in runs
+    ))
+    tasks = [t for t in tasks if t]
+    scope = "、".join(tasks) if tasks else "模型训练与评估"
+    return (
+        f"本文围绕{scope}任务，基于{dataset_name}完成了数据探索、预处理、模型训练、"
+        "性能评估和结果分析。研究过程使用统一的数据划分与随机种子设置，"
+        "并将实验配置、日志、指标和图表留档保存，便于后续复现和扩展。"
+    )
+
+
+def _limitations_text(dataset_meta: dict | None, runs: list[dict]) -> list[str]:
+    """根据数据规模、实验次数和结果形态生成研究局限。"""
+    notes: list[str] = []
+    for warning in (dataset_meta or {}).get("quality_warnings") or []:
+        if "缺失值" in warning:
+            notes.append("数据集中存在缺失值，预处理策略会影响结果；后续应在真实场景中核查缺失机制并做敏感性分析。")
+        if "重复样本" in warning:
+            notes.append("数据集中存在重复样本，若划分不当可能导致信息泄漏；后续需要更严格的数据来源核查与去重。")
+        if "类别分布不均" in warning:
+            notes.append("类别分布不均会影响少数类识别，后续应补充少数类样本并评估按类别指标。")
+        if "样本规模较小" in warning:
+            notes.append("样本规模较小会放大数据划分的偶然性，后续应扩大样本并使用交叉验证或多组随机划分。")
+    n_rows = (dataset_meta or {}).get("n_rows") or ((dataset_meta or {}).get("stats") or {}).get("n_rows")
+    try:
+        n_rows = int(n_rows)
+    except (TypeError, ValueError):
+        n_rows = 0
+    if n_rows and n_rows < 1000:
+        notes.append(
+            f"本文使用的样本规模约为 {n_rows} 条，模型学到的规律可能对更复杂的真实场景"
+            "泛化有限；后续需要引入更大规模、更多场景的数据继续验证。"
+        )
+
+    counts = ((dataset_meta or {}).get("stats") or {}).get("class_counts") or {}
+    if counts and len(counts) > 1:
+        values = list(counts.values())
+        if max(values) / max(min(values), 1) >= 3:
+            notes.append(
+                "数据集存在类别分布不均，少数类别样本偏少会影响指标稳定性；"
+                "后续可采用重采样、类别权重或更多少数类样本加以缓解。"
+            )
+
+    if len(runs) < 3:
+        notes.append(
+            "本文实验数量有限，尚未充分覆盖不同架构、不同优化策略和不同数据划分；"
+            "结论应理解为在当前实验设置下的观察结果，而非普适性结论。"
+        )
+
+    has_repeats = any(
+        (r.get("config") or {}).get("batch_kind") == "repeats" for r in runs
+    )
+    if not has_repeats:
+        notes.append(
+            "多数实验只报告单次或少量重复结果，随机性影响尚未充分量化；"
+            "后续可通过多次重复实验报告均值和标准差，提高结论稳健性。"
+        )
+
+    notes.append(
+        "当前研究主要关注模型性能与实验可复现性，对部署延迟、能耗、内存占用和"
+        "真实业务约束的评估还不充分。"
+    )
+    return notes
+
+
+def _future_work_text(runs: list[dict]) -> str:
+    """按实验覆盖范围给出可执行的后续研究方向。"""
+    tasks = {(r.get("config") or {}).get("task") for r in runs}
+    tasks.discard(None)
+    directions: list[str] = ["扩大数据来源和场景覆盖，验证模型在不同分布下的泛化能力"]
+    if "tabular_classification" in tasks or "text_classification" in tasks:
+        directions.append("比较更多轻量神经网络、集成模型和注意力结构，寻找性能与成本的平衡点")
+    if "image_classification" in tasks or "object_detection" in tasks or "semantic_segmentation" in tasks:
+        directions.append("引入更强的迁移学习、注意力机制或小目标增强策略，改善复杂场景下的表现")
+    if "time_series_forecasting" in tasks:
+        directions.append("研究长周期依赖、外部变量和多步预测不确定性对模型性能的影响")
+    if any((r.get("config") or {}).get("task") in ("tabular_classification", "image_classification", "text_classification") for r in runs):
+        directions.append("增加特征重要性、注意力热力图或类激活图等解释方法，增强模型决策过程透明度")
+    directions.append("结合推理速度、内存占用和部署环境评估方法，使研究结论更接近实际应用条件")
+    return "；".join(directions) + "。"
+
+
+def _references_for_runs(runs: list[dict]) -> list[str]:
+    """按真实使用到的模型家族生成基础文献；学生仍应补充领域文献。"""
+    refs = {
+        "sklearn": "PEDREGOSA F, VAROQUAUX G, GRAMFORT A, et al. Scikit-learn: machine learning in Python[J]. Journal of Machine Learning Research, 2011, 12: 2825-2830.",
+        "torch": "PASZKE A, GROSS S, MASSA F, et al. PyTorch: an imperative style, high-performance deep learning library[C]//Advances in Neural Information Processing Systems 32. 2019: 8026-8037.",
+        "random_forest": "BREIMAN L. Random forests[J]. Machine Learning, 2001, 45(1): 5-32.",
+        "gradient_boosting": "FRIEDMAN J H. Greedy function approximation: a gradient boosting machine[J]. Annals of Statistics, 2001, 29(5): 1189-1232.",
+        "resnet": "HE K, ZHANG X, REN S, et al. Deep residual learning for image recognition[C]//Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. 2016: 770-778.",
+        "lstm": "HOCHREITER S, SCHMIDHUBER J. Long short-term memory[J]. Neural Computation, 1997, 9(8): 1735-1780.",
+        "gru": "CHO K, VAN MERRIENBOER B, GULCEHRE C, et al. Learning phrase representations using RNN encoder-decoder for statistical machine translation[C]//Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing. 2014: 1724-1734.",
+        "transformer": "VASWANI A, SHAZEER N, PARMAR N, et al. Attention is all you need[C]//Advances in Neural Information Processing Systems 30. 2017: 5998-6008.",
+        "yolo": "REDMON J, DIVVALA S, GIRSHICK R, et al. You only look once: unified, real-time object detection[C]//Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. 2016: 779-788.",
+        "detr": "CARION N, MASSA F, SYNNAEVE G, et al. End-to-end object detection with transformers[C]//European Conference on Computer Vision. 2020: 213-229.",
+        "unet": "RONNEBERGER O, FISCHER P, BROX T. U-Net: convolutional networks for biomedical image segmentation[C]//International Conference on Medical Image Computing and Computer-Assisted Intervention. 2015: 234-241.",
+        "attention": "BAHDANAU D, CHO K, BENGIO Y. Neural machine translation by jointly learning to align and translate[C]//International Conference on Learning Representations. 2015.",
+    }
+    used: set[str] = {"sklearn", "torch"}
+    for r in runs:
+        cfg = r.get("config") or {}
+        model = str(cfg.get("model", "")).lower()
+        task = str(cfg.get("task", "")).lower()
+        if model in {"random_forest", "rf"}:
+            used.add("random_forest")
+        if model in {"gbdt", "gradient_boosting", "xgboost", "lightgbm"}:
+            used.add("gradient_boosting")
+        if model in {"resnet18", "resnet50", "resnet"}:
+            used.add("resnet")
+        if model == "lstm":
+            used.add("lstm")
+        if model == "gru":
+            used.add("gru")
+        if model in {"transformer", "text_transformer", "rtdetr-l", "rt_detr"}:
+            used.add("transformer")
+        if model.startswith("yolov8") or model.startswith("yolo"):
+            used.add("yolo")
+        if model == "unet":
+            used.add("unet")
+        if model == "textcnn":
+            used.add("attention")
+        if task == "object_detection":
+            used.update({"yolo", "detr"})
+    preferred_order = ["sklearn", "torch", "random_forest", "gradient_boosting", "resnet",
+                       "lstm", "gru", "transformer", "attention", "yolo", "detr", "unet"]
+    ordered = [refs[k] for k in preferred_order if k in used]
+    ordered.append("（请按 GB/T 7714-2015 著录规则补充与选题直接相关的领域文献，一般不少于 15 篇）")
+    return ordered
+
+
 def _research_notes(runs: list[dict], dataset_meta: dict | None) -> list[str]:
     """从已有实验结果生成研究性解读；不引入外部模型输出，保证可复现。"""
     notes: list[str] = []
@@ -670,9 +1008,13 @@ def build_report(
     if drafts.get("background"):
         _md_to_paras(doc, drafts["background"])
     else:
-        _para(doc, "随着人工智能技术的快速发展，机器学习与深度学习方法在各行各业得到了广泛应用。"
-                   "如何利用数据驱动的方法解决实际问题，是当前研究的热点之一。本文以此为背景展开研究，"
-                   "具有较好的理论意义与应用价值。（导出后请补充 2-3 段与选题直接相关的领域背景。）")
+        task_background = _task_background_text(runs) if runs else (
+            "随着人工智能技术的快速发展，机器学习与深度学习方法在各行各业得到了广泛应用。"
+            "如何利用数据驱动的方法解决实际问题，是当前研究的热点之一。"
+        )
+        _para(doc, task_background + " 本文以此为背景展开研究，"
+                   "重点通过可复现实验验证模型选择、改进策略与评价指标之间的关系。"
+                   "（导出后请补充 2-3 段与选题直接相关的领域背景。）")
     _heading(doc, "1.2  研究内容", 2)
     if drafts.get("content"):
         _md_to_paras(doc, drafts["content"])
@@ -687,15 +1029,22 @@ def build_report(
         items.append("设计对比实验，对结果进行可视化与误差分析，并总结改进方向")
         for i, it in enumerate(items):
             _para(doc, f"（{i + 1}）{it}；" if i < len(items) - 1 else f"（{i + 1}）{it}。", indent=False)
-    _heading(doc, "1.3  论文组织结构", 2)
+    _heading(doc, "1.3  研究方法与技术路线", 2)
+    if drafts.get("method"):
+        _md_to_paras(doc, drafts["method"])
+    else:
+        _para(doc, _research_method_text(dataset_meta, runs))
+    _heading(doc, "1.4  论文组织结构", 2)
     _para(doc, "本文共分为五章：第一章绪论；第二章介绍相关技术基础；第三章介绍数据集与预处理方法；"
                "第四章给出实验设置、结果与分析；第五章总结全文并展望未来工作。")
 
     # ---------------- 第二章 相关技术
     _heading(doc, "第二章  相关技术基础", 1)
+    _heading(doc, "2.1  文献综述", 2)
     if drafts.get("related"):
         _md_to_paras(doc, drafts["related"])
     else:
+        _para(doc, _literature_review_text(runs, dataset_meta))
         _para(doc, "本章介绍研究所涉及的关键技术。实验基于 Python 生态实现：传统机器学习模型采用 "
                    "scikit-learn，深度学习模型采用 PyTorch；实验过程通过可视化控制面板管理，"
                    "保证实验配置可追溯、结果可复现。")
@@ -737,6 +1086,10 @@ def build_report(
                 if (eda / fname).exists():
                     fi += 1
                     _figure(doc, eda / fname, f"图 3-{fi}  {cap}")
+        quality_warnings = dataset_meta.get("quality_warnings") or []
+        if quality_warnings:
+            _para(doc, "数据质量检查发现：" + " ".join(quality_warnings)
+                  + "上述问题已作为预处理和结果解释的约束条件，避免把数据缺陷误读为模型规律。")
         _heading(doc, "3.3  预处理与数据划分", 2)
         has_vision = any(r["config"].get("task") in ("image_classification", "object_detection", "semantic_segmentation") for r in runs)
         if has_vision:
@@ -799,6 +1152,8 @@ def build_report(
 
         notes = _research_notes(runs, dataset_meta)
         _heading(doc, "4.2  综合对比与研究性解读", 2)
+        for note in _evaluation_metrics_text(runs):
+            _para(doc, note)
         for note in notes:
             _para(doc, note)
 
@@ -843,6 +1198,13 @@ def build_report(
 
     # ---------------- 第五章 总结
     _heading(doc, "第五章  总结与展望", 1)
+    _heading(doc, "5.1  工作总结", 2)
+    if drafts.get("summary"):
+        _md_to_paras(doc, drafts["summary"])
+    else:
+        _para(doc, _work_summary_text(dataset_meta, runs))
+
+    _heading(doc, "5.2  主要结论", 2)
     if drafts.get("conclusion"):
         _md_to_paras(doc, drafts["conclusion"])
     else:
@@ -853,15 +1215,19 @@ def build_report(
                           "开展消融实验验证各改进模块的有效性、扩大数据规模并探索模型的可解释性。")
         _para(doc, conclusion)
 
+    _heading(doc, "5.3  研究局限", 2)
+    for note in _limitations_text(dataset_meta, runs):
+        _para(doc, note)
+
+    _heading(doc, "5.4  未来展望", 2)
+    if drafts.get("future"):
+        _md_to_paras(doc, drafts["future"])
+    else:
+        _para(doc, _future_work_text(runs))
+
     # ---------------- 参考文献（GB/T 7714 风格）
     _heading(doc, "参考文献", 1)
-    refs = [
-        "PEDREGOSA F, VAROQUAUX G, GRAMFORT A, et al. Scikit-learn: machine learning in Python[J]. Journal of Machine Learning Research, 2011, 12: 2825-2830.",
-        "PASZKE A, GROSS S, MASSA F, et al. PyTorch: an imperative style, high-performance deep learning library[C]//Advances in Neural Information Processing Systems 32. 2019: 8026-8037.",
-        "HE K, ZHANG X, REN S, et al. Deep residual learning for image recognition[C]//Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. 2016: 770-778.",
-        "BREIMAN L. Random forests[J]. Machine Learning, 2001, 45(1): 5-32.",
-        "（请按 GB/T 7714-2015 著录规则补充与选题直接相关的文献，一般不少于 15 篇）",
-    ]
+    refs = _references_for_runs(runs)
     for i, ref in enumerate(refs, 1):
         p = doc.add_paragraph()
         p.paragraph_format.line_spacing = 1.5

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """构建 Windows 离线整合包：内嵌 Python 3.13 + 预装依赖 + 源码，解压即用。
 
-产物: dist/ThesisForge-v0.4.3-win64-offline.zip
+产物: dist/ThesisForge-v{APP_VERSION}-win64-offline.zip
 安全约定：
 - 下载地址为硬编码的 python.org 官方 https 直链，经 validate_public_http_url
   域名白名单校验后，由 app.datasets_hub._fetch 执行（内含 SSRF 逐跳校验：
@@ -28,6 +28,7 @@ DIST = ROOT / "dist"
 PKG = DIST / f"ThesisForge-v{APP_VERSION}-win64"
 RT = PKG / "runtime"
 PY_EMBED_URL = "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-amd64.zip"
+PY_EMBED_CACHE = ROOT / "build" / "cache"
 ALLOWED_HOST = "www.python.org"
 DEPS = ["fastapi", "uvicorn", "scikit-learn", "pandas", "numpy", "matplotlib",
         "joblib", "httpx", "python-docx", "python-multipart", "pywebview"]
@@ -56,11 +57,23 @@ def safe_extract_zip(zf_source, dest: Path) -> None:
 
 
 def download_python_embed() -> bytes:
-    """白名单域名校验后，经由带 SSRF 防护的 _fetch 下载官方内嵌 Python。"""
+    """下载官方内嵌 Python；支持缓存和环境变量提供的离线包。"""
+    cached = os.environ.get("THESISFORGE_PY_EMBED_ZIP", "").strip()
+    if cached:
+        data = Path(cached).read_bytes()
+        PY_EMBED_CACHE.mkdir(parents=True, exist_ok=True)
+        (PY_EMBED_CACHE / Path(PY_EMBED_URL).name).write_bytes(data)
+        return data
+    cache_file = PY_EMBED_CACHE / Path(PY_EMBED_URL).name
+    if cache_file.exists():
+        return cache_file.read_bytes()
     validate_public_http_url(PY_EMBED_URL)
     if urlparse(PY_EMBED_URL).hostname != ALLOWED_HOST:
         raise ValueError(f"仅允许从 {ALLOWED_HOST} 下载")
-    return _fetch(PY_EMBED_URL)
+    data = _fetch(PY_EMBED_URL)
+    PY_EMBED_CACHE.mkdir(parents=True, exist_ok=True)
+    cache_file.write_bytes(data)
+    return data
 
 
 def main():
@@ -78,17 +91,30 @@ def main():
     pth.write_text("python313.zip\n.\n..\nsite-packages\nimport site\n", encoding="ascii")
 
     # 2. 预装依赖（用系统 pip 安装到包内 site-packages）
-    step("安装核心依赖（较大，请耐心）...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "--target", str(RT / "site-packages"),
-                    "--no-warn-script-location", *DEPS], check=True)
-    step("安装 pip（供包内一键安装 PyTorch 用）...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "--target", str(RT / "site-packages"),
-                    "--no-warn-script-location", "pip"], check=True)
+    site_packages_src = os.environ.get("THESISFORGE_SITE_PACKAGES", "").strip()
+    if site_packages_src:
+        step(f"复用本地依赖目录 {site_packages_src} ...")
+        shutil.copytree(site_packages_src, RT / "site-packages", dirs_exist_ok=True)
+    else:
+        step("安装核心依赖（较大，请耐心）...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--target", str(RT / "site-packages"),
+                        "--no-warn-script-location", *DEPS], check=True)
+    if not (RT / "site-packages" / "pip").exists():
+        step("安装 pip（供包内一键安装 PyTorch 用）...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--target", str(RT / "site-packages"),
+                        "--no-warn-script-location", "pip"], check=True)
+    else:
+        step("复用本地 site-packages 中的 pip ...")
 
     # 3. 复制源码
     step("复制源码与文档 ...")
     shutil.copytree(ROOT / "app", PKG / "app", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(ROOT / "web", PKG / "web")
+    docs_dir = PKG / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    for doc in ["新手使用手册.md", "目标检测指南.md", "模型解释性指南.md",
+                "时间序列预测指南.md", "自动调参指南.md", "ISSUES.md", "ROADMAP.md"]:
+        shutil.copy2(ROOT / "docs" / doc, docs_dir / doc)
     for f in ["README.md", "LICENSE", "requirements.txt"]:
         shutil.copy2(ROOT / f, PKG / f)
 
@@ -147,6 +173,9 @@ def main():
 【AI 分析配置】
 在「AI 设置」页填入 OpenAI 兼容接口（智谱 glm-4-flash 有免费额度）。
 不配置也能用：内置规则分析器会生成基础分析。
+
+【新手文档】
+docs 目录内含新手使用手册、目标检测、时间序列、自动调参和模型解释性指南。
 
 【注意】
 - 请勿使用 360 等软件"清理"本目录的 runtime 文件夹

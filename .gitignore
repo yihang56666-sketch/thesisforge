@@ -15,6 +15,22 @@ build/
 Thumbs.db
 server.log
 .playwright-mcp/
+.playwright-cli/
+output/
 scripts/.thesis_demo_state.json
 scripts/.water_demo_state.json
+scripts/.uav_demo_state.json
 scripts/_wizard_*.png
+
+# Local experiment outputs and pretrained weights
+runs/
+yolov8n.pt
+
+# Generated QA sheets / draft reports
+docs/_*.png
+docs/报告草稿_*.docx
+docs/实验对比_*.csv
+docs/实验对比_*.md
+docs/实验报告_*.md
+docs/水面检测_实验报告.md
+docs/水面检测_样例图.png

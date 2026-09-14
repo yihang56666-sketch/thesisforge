@@ -120,6 +120,15 @@ function datasetTaskLabel(d) {
   return "图像";
 }
 
+function datasetQualityHtml(meta, compact = false) {
+  const warnings = (meta && meta.quality_warnings) || [];
+  if (!warnings.length) return "";
+  return `<div class="quality-warning ${compact ? "compact" : ""}">
+    <b>数据质量提醒</b>
+    <ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+  </div>`;
+}
+
 /* 折线图（纯 SVG） */
 function lineChart(series, opts = {}) {
   const pts = series.flatMap((s) => s.points);
@@ -370,6 +379,7 @@ async function openDataset(id) {
           <button class="btn small" id="btn-ds-ai">AI 分析该数据集</button></div>
         <div class="muted small mt8">${esc(meta.desc || "")}</div>
         <div class="kv-row">${statChips.map(([k, v]) => `<div class="kv"><b>${esc(v)}</b>${k}</div>`).join("")}</div>
+        ${datasetQualityHtml(meta)}
         ${meta.eda_files && meta.eda_files.length ? `<div class="figure-grid mt14">${meta.eda_files.map((f) => `
           <figure><img src="/api/datasets/${esc(id)}/eda/${esc(f)}" loading="lazy"><figcaption>${esc(f.replace(".png", ""))}</figcaption></figure>`).join("")}</div>` : ""}
         <hr class="sep"><b class="small">数据预览</b>

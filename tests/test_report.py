@@ -245,6 +245,89 @@ class ReportResearchDepthTest(unittest.TestCase):
         self.assertTrue(any("accuracy = 0.8800" in t and "macro_f1 = 0.7200" in t
                             and "过拟合" in t and "类别不平衡" in t for t in texts))
 
+    def test_report_generates_structured_research_method_and_conclusion(self):
+        runs = [
+            {
+                "run_id": "base", "name": "基线", "group": "baseline",
+                "config": {"task": "tabular_classification", "model": "logistic_regression",
+                           "model_label": "逻辑回归", "group": "baseline", "params": {}},
+                "summary": {"model_label": "逻辑回归", "group": "baseline",
+                            "primary_metric": {"name": "accuracy", "value": 0.80},
+                            "metrics": {"accuracy": 0.80}, "eval_source": "test"},
+            },
+            {
+                "run_id": "imp", "name": "改进", "group": "improved",
+                "config": {"task": "tabular_classification", "model": "mlp",
+                           "model_label": "MLP", "group": "improved", "params": {}},
+                "summary": {"model_label": "MLP", "group": "improved",
+                            "primary_metric": {"name": "accuracy", "value": 0.86},
+                            "metrics": {"accuracy": 0.86}, "eval_source": "test"},
+            },
+        ]
+        dataset_meta = {
+            "name": "示例分类集", "columns": ["x1", "x2"], "target": "label", "n_rows": 200,
+            "stats": {"class_counts": {"yes": 80, "no": 20}},
+        }
+        texts = self._build(runs, dataset_meta)
+
+        self.assertIn("1.3  研究方法与技术路线", texts)
+        self.assertIn("4.2  综合对比与研究性解读", texts)
+        self.assertIn("5.1  工作总结", texts)
+        self.assertIn("5.2  主要结论", texts)
+        self.assertIn("5.3  研究局限", texts)
+        self.assertIn("5.4  未来展望", texts)
+        self.assertTrue(any("数据获取与质量控制" in t and "对比与消融验证" in t for t in texts))
+        self.assertTrue(any("验证集用于模型与超参数选择" in t and "测试集只用于最终评估" in t for t in texts))
+        self.assertTrue(any("样本规模约为 200 条" in t for t in texts))
+        self.assertTrue(any("部署延迟" in t and "能耗" in t for t in texts))
+
+    def test_report_generates_task_specific_literature_review(self):
+        runs = [
+            {
+                "run_id": "base", "name": "目标检测基线", "group": "baseline",
+                "config": {"task": "object_detection", "model": "yolov8n",
+                           "model_label": "YOLOv8n", "group": "baseline", "params": {}},
+                "summary": {"model_label": "YOLOv8n", "group": "baseline",
+                            "primary_metric": {"name": "mAP50", "value": 0.82},
+                            "metrics": {"mAP50": 0.82}, "eval_source": "test"},
+            },
+            {
+                "run_id": "imp", "name": "分割对照", "group": "improved",
+                "config": {"task": "semantic_segmentation", "model": "unet",
+                           "model_label": "U-Net 语义分割", "group": "improved", "params": {}},
+                "summary": {"model_label": "U-Net 语义分割", "group": "improved",
+                            "primary_metric": {"name": "iou", "value": 0.78},
+                            "metrics": {"iou": 0.78, "dice": 0.86, "pixel_accuracy": 0.92},
+                            "eval_source": "test"},
+            },
+        ]
+        dataset_meta = {"name": "示例视觉数据集", "columns": [], "target": "bbox"}
+        texts = self._build(runs, dataset_meta)
+
+        self.assertTrue(any("文献综述" in t for t in texts))
+        self.assertTrue(any("目标检测" in t and "YOLO" in t and "端到端" in t for t in texts))
+        self.assertTrue(any("语义分割" in t and "U-Net" in t and "IoU" in t for t in texts))
+
+    def test_report_summarizes_dataset_quality_warnings(self):
+        runs = [{
+            "run_id": "base", "name": "基线", "group": "baseline",
+            "config": {"task": "tabular_classification", "model": "logistic_regression",
+                       "model_label": "逻辑回归", "group": "baseline", "params": {}},
+            "summary": {"model_label": "逻辑回归", "group": "baseline",
+                        "primary_metric": {"name": "accuracy", "value": 0.80},
+                        "metrics": {"accuracy": 0.80}, "eval_source": "test"},
+        }]
+        dataset_meta = {
+            "name": "示例数据集", "columns": ["feature"], "target": "label", "n_rows": 150,
+            "quality_warnings": [
+                "存在 3 个缺失值，需在预处理阶段明确填充或删除策略。",
+                "存在 2 条重复样本，建议在划分前去重，避免训练/评估信息泄漏。",
+            ],
+        }
+        texts = self._build(runs, dataset_meta)
+
+        self.assertTrue(any("数据质量检查" in t and "缺失值" in t and "重复样本" in t for t in texts))
+
 
 if __name__ == "__main__":
     unittest.main()

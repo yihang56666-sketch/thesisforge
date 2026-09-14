@@ -243,6 +243,36 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .ds-card .desc { color: var(--muted); font-size: 12px; flex: 1; line-height: 1.6; }
 .ds-card .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 1px 6px; }
+.tag.warn { color: #8a5b00; border-color: #d9b65e; background: #fdf3d9; }
+
+/* ---------- 数据质量提醒 ---------- */
+.quality-warning {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid #e0b25a;
+  border-left: 3px solid #e0b25a;
+  border-radius: 4px;
+  background: #fdf6e9;
+  color: #6d4d00;
+}
+.quality-warning b {
+  display: block;
+  font-size: 12px;
+  color: #8a5b00;
+}
+.quality-warning ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.quality-warning.compact {
+  margin: 6px 0 0;
+  padding: 4px 7px;
+  border-left-width: 1px;
+}
+.quality-warning.compact b { display: none; }
+.quality-warning.compact ul { margin: 0; padding-left: 12px; }
 
 /* ---------- 模型选择 ---------- */
 .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

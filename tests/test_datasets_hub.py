@@ -90,6 +90,24 @@ class BuiltinDemoTest(unittest.TestCase):
         self.assertEqual(meta["stats"]["duplicates"], 2)
         self.assertAlmostEqual(meta["stats"]["duplicate_rate"], 0.4)
 
+    def test_eda_generates_real_data_quality_warnings(self):
+        rows = ["feature,label"]
+        # 9 个重复特征样本，label 分布 7:1，模拟小样本且类别不平衡。
+        for i in range(7):
+            rows.append(f"{i},major")
+        rows.append("8,minor")
+        rows.append(",major")
+        rows.append("0,major")
+        rows.append("9,major")
+        meta = datasets_hub.import_bytes("quality.csv", "\n".join(rows).encode("utf-8"))
+
+        warnings = meta.get("quality_warnings") or []
+        text = "\n".join(warnings)
+        self.assertIn("缺失值", text)
+        self.assertIn("重复样本", text)
+        self.assertIn("类别分布不均", text)
+        self.assertIn("样本规模较小", text)
+
 
 if __name__ == "__main__":
     unittest.main()

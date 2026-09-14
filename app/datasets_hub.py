@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 from .config import DATASETS_DIR, UPLOADS_DIR
 from .config import APP_VERSION
@@ -335,6 +334,7 @@ def run_eda(ds_id: str) -> list[str]:
         elif yaml_path is not None:
             try:
                 import yaml
+
                 spec = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
                 names = spec.get("names") or {}
                 if isinstance(names, dict):
@@ -432,10 +432,46 @@ def run_eda(ds_id: str) -> list[str]:
     if "duplicates" not in meta["stats"]:
         meta["stats"]["duplicates"] = int(meta["stats"].get("duplicates", 0))
         meta["stats"]["duplicate_rate"] = float(meta["stats"].get("duplicate_rate", 0.0))
+    meta["quality_warnings"] = _quality_warnings(meta)
     meta["eda_files"] = files
     meta["eda_done"] = True
     _save_meta(ds_dir, meta)
     return files
+
+
+def _quality_warnings(meta: dict) -> list[str]:
+    """把数据质量问题转成一句人话；供 UI、报告和交付前检查共用。"""
+    out: list[str] = []
+    stats = meta.get("stats") or {}
+
+    if meta.get("type") == "image":
+        counts = stats.get("class_counts") or {}
+        if counts:
+            values = [int(v) for v in counts.values() if int(v) > 0]
+            small = [k for k, v in counts.items() if int(v) < 20]
+            if small:
+                out.append("有类别图像数量少于 20 张，容易导致验证结果不稳定。")
+            if values and max(values) / max(min(values), 1) >= 3:
+                out.append("图像类别分布不均，建议补充少数类或使用类别权重。")
+        if int(meta.get("n_images") or 0) < 100:
+            out.append("图像样本规模较小，建议在真实数据上继续扩充后再做最终结论。")
+    else:
+        missing = stats.get("missing") or {}
+        n_rows = int(stats.get("n_rows") or meta.get("n_rows") or 0)
+        total_missing = sum(int(v) for v in missing.values())
+        if total_missing:
+            out.append(f"存在 {total_missing} 个缺失值，需在预处理阶段明确填充或删除策略。")
+        duplicates = int(stats.get("duplicates") or 0)
+        if duplicates:
+            out.append(f"存在 {duplicates} 条重复样本，建议在划分前去重，避免训练/评估信息泄漏。")
+        counts = stats.get("class_counts") or {}
+        if len(counts) > 1:
+            values = [int(v) for v in counts.values() if int(v) > 0]
+            if values and max(values) / max(min(values), 1) >= 3:
+                out.append("类别分布不均，建议补充少数类样本，或同时报告宏平均 F1 与按类指标。")
+        if 0 < n_rows < 200:
+            out.append("样本规模较小，结论容易受数据划分影响，建议使用交叉验证或扩大样本。")
+    return out
 
 
 # ---------------------------------------------------------------- 载入/导入/下载
@@ -631,6 +667,8 @@ def import_path(filename: str, stored: Path) -> dict:
             moved_root = ds_dir if root == staging else ds_dir / root.name
             task = "object_detection"
             try:
+                import yaml
+
                 yaml_path = next(p for p in (moved_root / "data.yaml", moved_root / "data.yml") if p.exists())
                 spec = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
                 if str(spec.get("task", "")).lower() in ("segment", "segmentation"):
