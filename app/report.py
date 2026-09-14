@@ -586,6 +586,9 @@ def _literature_review_text(runs: list[dict], dataset_meta: dict | None) -> str:
         "早期工作更多依赖人工特征与传统分类器，近年研究则把重点转向端到端学习、迁移学习、注意力机制"
         "以及面向具体部署约束的轻量化设计。"
     ]
+    for text in _domain_context_text(_domain_context(None, dataset_meta)).split("。"):
+        if text:
+            pieces.append(text + "。")
     if "tabular_classification" in tasks or "tabular_regression" in tasks:
         pieces.append(
             "在表格数据分析中，逻辑回归、随机森林和梯度提升方法因可解释性与较强的小样本表现被广泛用作基线；"
@@ -639,6 +642,9 @@ def _research_method_text(dataset_meta: dict | None, runs: list[dict]) -> str:
         f"本文以{dataset_name}为对象，按照“数据获取与质量控制—预处理与数据划分—模型构建与训练—"
         "结果评估与误差分析—对比与消融验证”的路线组织研究工作。"
     ]
+    for text in _domain_context_text(_domain_context(None, dataset_meta)).split("。"):
+        if text:
+            pieces.append(text + "。")
     if "tabular_classification" in tasks or "tabular_regression" in tasks:
         pieces.append(
             "在表格数据上，先检查缺失值、重复样本、字段类型和类别分布，再执行缺失填充、"

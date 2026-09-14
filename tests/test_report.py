@@ -102,6 +102,11 @@ class ReportResearchDepthTest(unittest.TestCase):
         self.assertTrue(any("水面" in t and "倒影" in t and "小目标" in t for t in texts))
         self.assertTrue(any("光照变化" in t and "边界" in t for t in texts))
 
+        lit_i = texts.index("2.1  文献综述")
+        method_i = texts.index("1.3  研究方法与技术路线")
+        self.assertTrue("水面" in texts[lit_i + 1] and "倒影" in texts[lit_i + 1])
+        self.assertTrue("水面" in texts[method_i + 1] and "倒影" in texts[method_i + 1])
+
     def test_aerial_detection_report_adds_domain_context(self):
         runs = [{
             "run_id": "det", "name": "YOLOv8n", "group": "baseline",
@@ -119,6 +124,11 @@ class ReportResearchDepthTest(unittest.TestCase):
 
         self.assertTrue(any("航拍" in t and "视角" in t and "高度变化" in t for t in texts))
         self.assertTrue(any("小目标" in t and "光照变化" in t for t in texts))
+
+        lit_i = texts.index("2.1  文献综述")
+        method_i = texts.index("1.3  研究方法与技术路线")
+        self.assertTrue("航拍" in texts[lit_i + 1] and "视角" in texts[lit_i + 1])
+        self.assertTrue("航拍" in texts[method_i + 1] and "视角" in texts[method_i + 1])
 
     def test_report_flags_overfitting_from_epoch_history(self):
         runs = [
