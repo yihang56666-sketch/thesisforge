@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import re
+import statistics
 from pathlib import Path
 
 from docx import Document
@@ -224,11 +225,38 @@ def _run_by_group(runs: list[dict], group: str) -> dict | None:
     return None
 
 
+def _repeat_notes(runs: list[dict]) -> list[str]:
+    """汇总同一 batch 的重复实验，帮助判断性能波动是否可接受。"""
+    grouped: dict[str, list[dict]] = {}
+    for run in runs:
+        cfg = run.get("config") or {}
+        if cfg.get("batch_kind") == "repeats" and cfg.get("batch_id"):
+            grouped.setdefault(str(cfg["batch_id"]), []).append(run)
+
+    notes: list[str] = []
+    for batch_runs in grouped.values():
+        if len(batch_runs) < 2:
+            continue
+        metric_name = _primary_metric(batch_runs[0])[0]
+        values = [_primary_metric(run)[1] for run in batch_runs]
+        mean = statistics.fmean(values)
+        std = statistics.stdev(values)
+        label = (batch_runs[0].get("summary") or {}).get("model_label", "该方案")
+        stability = "波动很小，结果较稳定" if std <= 0.02 else "波动偏大，建议检查随机性或样本划分"
+        notes.append(
+            f"重复实验显示，{label} 共运行 {len(batch_runs)} 次，{metric_name}平均值为 {mean:.3f}，"
+            f"样本标准差为 {std:.3f}；{stability}。"
+        )
+    return notes
+
+
 def _research_notes(runs: list[dict], dataset_meta: dict | None) -> list[str]:
     """从已有实验结果生成研究性解读；不引入外部模型输出，保证可复现。"""
     notes: list[str] = []
     base = _run_by_group(runs, "baseline")
     improved = _run_by_group(runs, "improved")
+    repeat_batches = _repeat_notes(runs)
+    notes.extend(repeat_batches)
     if base and improved:
         base_name, base_value = _primary_metric(base)
         imp_name, imp_value = _primary_metric(improved)
@@ -278,7 +306,6 @@ def _research_notes(runs: list[dict], dataset_meta: dict | None) -> list[str]:
                     f"{label} 的训练准确率 {train_acc:.4f} 明显高于验证准确率 {val_acc:.4f}，"
                     "存在过拟合迹象；后续可加强数据增强、提高权重衰减、增加 Dropout 或减小模型容量。"
                 )
-                break
 
     if runs:
         eval_source = {"test": "独立测试集", "val": "验证集"}.get(

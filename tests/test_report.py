@@ -100,6 +100,23 @@ class ReportResearchDepthTest(unittest.TestCase):
 
         self.assertTrue(any("过拟合迹象" in t and "0.9900" in t and "0.8000" in t for t in texts))
 
+    def test_report_summarizes_repeated_experiments(self):
+        runs = []
+        for i, acc in enumerate([0.91, 0.93, 0.95], start=1):
+            runs.append({
+                "run_id": f"repeat-{i}", "name": f"改进-重复-{i}", "group": "improved",
+                "config": {"task": "tabular_classification", "model": "mlp",
+                           "model_label": "MLP", "group": "improved", "params": {},
+                           "batch_id": "rep-1", "batch_kind": "repeats", "repeat_index": i},
+                "summary": {"model_label": "MLP", "group": "improved",
+                            "primary_metric": {"name": "accuracy", "value": acc},
+                            "metrics": {"accuracy": acc}, "eval_source": "test"},
+            })
+        dataset_meta = {"name": "示例分类集", "columns": [], "target": "label"}
+        texts = self._build(runs, dataset_meta)
+
+        self.assertTrue(any("重复实验" in t and "0.930" in t and "0.020" in t for t in texts))
+
 
 if __name__ == "__main__":
     unittest.main()
