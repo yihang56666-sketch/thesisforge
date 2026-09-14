@@ -207,6 +207,90 @@ def _field(p, instr: str, hint: str) -> None:
     r4._r.append(end)
 
 
+# ---------------------------------------------------------------- 研究解读
+def _primary_metric(run: dict) -> tuple[str, float]:
+    pm = (run.get("summary") or {}).get("primary_metric") or {}
+    value = pm.get("value")
+    try:
+        return str(pm.get("name", "primary_metric")), float(value)
+    except (TypeError, ValueError):
+        return str(pm.get("name", "primary_metric")), 0.0
+
+
+def _run_by_group(runs: list[dict], group: str) -> dict | None:
+    for run in runs:
+        if (run.get("config") or {}).get("group") == group:
+            return run
+    return None
+
+
+def _research_notes(runs: list[dict], dataset_meta: dict | None) -> list[str]:
+    """从已有实验结果生成研究性解读；不引入外部模型输出，保证可复现。"""
+    notes: list[str] = []
+    base = _run_by_group(runs, "baseline")
+    improved = _run_by_group(runs, "improved")
+    if base and improved:
+        base_name, base_value = _primary_metric(base)
+        imp_name, imp_value = _primary_metric(improved)
+        if base_name == imp_name:
+            base_label = (base.get("summary") or {}).get("model_label", "基线模型")
+            imp_label = (improved.get("summary") or {}).get("model_label", "改进模型")
+            relative = (imp_value - base_value) / base_value * 100 if base_value else 0.0
+            notes.append(
+                f"整体对比显示，{imp_label} 的{base_name}由基线 {base_label} 的 {base_value:.4f} "
+                f"提升至 {imp_value:.4f}，相对变化 {relative:.1f}%。这个差值是判断改进是否有效的核心依据。"
+            )
+
+    if improved:
+        ablation = _run_by_group(runs, "ablation")
+        if ablation:
+            imp_name, imp_value = _primary_metric(improved)
+            abl_name, abl_value = _primary_metric(ablation)
+            if imp_name == abl_name:
+                imp_label = (improved.get("summary") or {}).get("model_label", "完整方案")
+                abl_label = (ablation.get("summary") or {}).get("model_label", "消融方案")
+                notes.append(
+                    f"消融实验中，{abl_label} 的{abl_name}为 {abl_value:.4f}，与完整方案 {imp_label} "
+                    f"的 {imp_value:.4f} 相差 {abl_value - imp_value:+.4f}；该差值可用来解释被移除或修改的组件对最终性能的贡献。"
+                )
+
+    if dataset_meta:
+        counts = ((dataset_meta.get("stats") or {}).get("class_counts") or {})
+        if counts:
+            values = list(counts.values())
+            ratio = max(values) / max(min(values), 1)
+            if ratio >= 3:
+                notes.append(
+                    f"数据集存在类别不平衡（最多/最少类样本比约 {ratio:.1f}:1）。"
+                    "此时不能只看准确率，应同时报告宏平均 F1、按类别的精确率与召回率，必要时使用类别权重或重采样。"
+                )
+
+    for run in runs:
+        epochs = (run.get("summary") or {}).get("epochs") or []
+        if epochs:
+            last = epochs[-1]
+            train_acc = last.get("train_acc")
+            val_acc = last.get("val_acc")
+            if isinstance(train_acc, (int, float)) and isinstance(val_acc, (int, float)) \
+                    and train_acc - val_acc > 0.08:
+                label = (run.get("summary") or {}).get("model_label", "该模型")
+                notes.append(
+                    f"{label} 的训练准确率 {train_acc:.4f} 明显高于验证准确率 {val_acc:.4f}，"
+                    "存在过拟合迹象；后续可加强数据增强、提高权重衰减、增加 Dropout 或减小模型容量。"
+                )
+                break
+
+    if runs:
+        eval_source = {"test": "独立测试集", "val": "验证集"}.get(
+            runs[0].get("summary", {}).get("eval_source"), "评估集"
+        )
+        notes.append(
+            f"本章结果以{eval_source}为主。模型选择仍应依据验证集或交叉验证完成，"
+            "测试集只用于最终评估，避免反复查看同一份测试数据造成选择偏置。"
+        )
+    return notes
+
+
 # ---------------------------------------------------------------- 文档组装
 def _setup_page(doc: Document, header_text: str | None) -> None:
     sec = doc.sections[0]
@@ -438,13 +522,18 @@ def build_report(
                    "供稳定性参考。论文分析应避免反复查看同一测试集造成选择偏置，"
                    "必要时补充多次重复实验的均值与标准差。")
 
+        notes = _research_notes(runs, dataset_meta)
+        _heading(doc, "4.2  综合对比与研究性解读", 2)
+        for note in notes:
+            _para(doc, note)
+
     fig_no = 0
     for ri, r in enumerate(runs):
         s = r["summary"] or {}
         cfg = r["config"]
         rd = Path(r.get("run_dir", ""))
         model_label = s.get("model_label", cfg.get("model", "实验"))
-        _heading(doc, f"4.{ri + 2}  {model_label} 实验结果分析", 2)
+        _heading(doc, f"4.{ri + 3}  {model_label} 实验结果分析", 2)
         if s.get("cv_scores"):
             import numpy as np
 
