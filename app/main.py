@@ -1020,6 +1020,15 @@ def run_server(host: str = "127.0.0.1", port: int | None = None, open_browser: b
 
 def main(argv: list[str] | None = None) -> int:
     """统一启动入口：解析 --browser/--no-window/THESISFORGE_MODE 后启动对应形态。"""
+    args = {str(a).lower() for a in (argv if argv is not None else sys.argv[1:])}
+    if "--tf-worker" in args:
+        raw = [str(a) for a in (argv if argv is not None else sys.argv[1:])]
+        idx = raw.index("--tf-worker")
+        script_name = raw[idx + 1] if idx + 1 < len(raw) else ""
+        module_name = script_name[:-3] if script_name.endswith(".py") else script_name
+        module = importlib.import_module(f"app.{module_name}")
+        return int(module.main())
+
     from .desktop import resolve_startup_mode, run_browser, run_desktop, run_headless
 
     mode = resolve_startup_mode(argv if argv is not None else sys.argv[1:])

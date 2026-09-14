@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from app import runner
+from app.main import main
 
 
 class RunDirValidationTest(unittest.TestCase):
@@ -35,6 +36,9 @@ class AllowedScriptsTest(unittest.TestCase):
     def test_detection_script_is_allowed(self):
         self.assertIn("train_detection.py", runner._ALLOWED_SCRIPTS)
 
+    def test_semantic_script_is_allowed(self):
+        self.assertIn("train_semantic.py", runner._ALLOWED_SCRIPTS)
+
     def test_create_run_accepts_detection_script(self):
         rid = runner.create_run({
             "task": "object_detection", "model": "yolov8n", "run_id": "unused",
@@ -56,6 +60,11 @@ class AllowedScriptsTest(unittest.TestCase):
         self.assertEqual(cmd[1], "--tf-worker")
         self.assertEqual(cmd[2], "train_torch.py")
         self.assertIn("--run-dir", cmd)
+
+    def test_main_dispatches_tf_worker_to_semantic_script(self):
+        with mock.patch("app.train_semantic.main", return_value=0) as worker:
+            self.assertEqual(main(["--tf-worker", "train_semantic.py"]), 0)
+        worker.assert_called_once()
 
 
 if __name__ == "__main__":
