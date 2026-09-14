@@ -347,10 +347,27 @@ CATALOG: dict = {
         },
     },
     "semantic_segmentation": {
-        "label": "图像 · 实例分割",
+        "label": "图像 · 语义/实例分割",
         "needs_target": False,
         "needs_text_column": False,
         "models": {
+            "unet": {
+                "label": "U-Net 语义分割",
+                "desc": "轻量编码器-解码器网络，使用 images/ + masks/ 像素级掩码数据，直接输出每个像素的类别；适合水面、道路、建筑轮廓等分割毕设。",
+                "engine": "torch",
+                "params": {
+                    "epochs": {"type": "int", "default": 30, "min": 1, "max": 300, "label": "训练轮数"},
+                    "imgsz": {"type": "int", "default": 256, "min": 64, "max": 512, "label": "图像尺寸"},
+                    "batch_size": {"type": "int", "default": 8, "min": 1, "max": 64, "label": "批大小"},
+                    "lr": {"type": "float", "default": 0.001, "min": 0.00001, "max": 0.1, "label": "学习率"},
+                    "base_channels": {"type": "int", "default": 32, "min": 8, "max": 128, "label": "基础通道数"},
+                    "dropout": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.5, "label": "Dropout"},
+                    "weight_decay": {"type": "float", "default": 0.0001, "min": 0.0, "max": 0.1, "label": "权重衰减"},
+                    "seed": {"type": "int", "default": 42, "min": 0, "max": 999999, "label": "随机种子"},
+                    "device": {"type": "choice", "default": "auto",
+                               "options": ["auto", "cpu", "gpu"], "label": "训练设备"},
+                },
+            },
             "yolov8n-seg": {
                 "label": "YOLOv8n-seg 实例分割",
                 "desc": "Ultralytics YOLOv8 nano 分割模型，训练快，适合小规模掩码/多边形标注数据与分割入门毕设。",

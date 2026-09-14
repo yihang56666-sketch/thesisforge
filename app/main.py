@@ -619,7 +619,11 @@ def create_run(req: CreateRunReq):
     if task in ("object_detection", "semantic_segmentation"):
         if ds_meta.get("task") != task:
             kind = "实例分割" if task == "semantic_segmentation" else "目标检测"
-            raise HTTPException(400, f"{kind}需要 YOLO 格式数据集（zip：images/ + labels/ 或 data.yaml）")
+            if task == "semantic_segmentation" and req.model == "unet":
+                if ds_meta.get("data_format") != "pixel_masks":
+                    raise HTTPException(400, "U-Net 语义分割需要像素级掩码数据集（zip：images/ + masks/）")
+            else:
+                raise HTTPException(400, f"{kind}需要 YOLO 格式数据集（zip：images/ + labels/ 或 data.yaml）")
     if task == "text_classification":
         if ds_meta["type"] != "tabular":
             raise HTTPException(400, "文本分类需要包含文本列与标签列的表格数据(CSV)")
@@ -628,6 +632,8 @@ def create_run(req: CreateRunReq):
 
     engine = spec.get("engine") or "sklearn"
     script = {"torch": "train_torch.py", "ultralytics": "train_detection.py"}.get(engine, "train_sklearn.py")
+    if task == "semantic_segmentation" and engine == "torch" and req.model == "unet":
+        script = "train_semantic.py"
     if engine == "ultralytics":
         try:
             has_ulti = importlib.util.find_spec("ultralytics") is not None
@@ -646,8 +652,8 @@ def create_run(req: CreateRunReq):
             raise HTTPException(400, "未检测到 PyTorch，无法进行神经网络训练。请运行「安装图像训练-CPU版.bat」"
                                     "（或 GPU 版），或改用传统机器学习模型。")
     # 标签列兜底：未指定时使用最后一列
-    target = req.target if task not in ("image_classification", "object_detection") else None
-    if task not in ("image_classification", "object_detection") and not target:
+    target = req.target if task not in ("image_classification", "object_detection", "semantic_segmentation") else None
+    if task not in ("image_classification", "object_detection", "semantic_segmentation") and not target:
         if ds_meta.get("target"):
             target = ds_meta["target"]
         elif ds_meta.get("columns"):

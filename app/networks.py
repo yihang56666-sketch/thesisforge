@@ -152,6 +152,61 @@ class TextRNN(nn.Module):
         return self.fc(self.dropout(out))
 
 
+class UNet(nn.Module):
+    """轻量 U-Net：编码器下采样 + 解码器上采样，用于像素级语义分割。"""
+
+    def __init__(self, num_classes, base_channels=32, dropout=0.1):
+        torch, nn, _ = _torch()
+        super().__init__()
+        self._torch = torch
+        c = [int(base_channels) for _ in range(4)]
+        c = [max(8, x) for x in c]
+        self.down1 = nn.Sequential(
+            nn.Conv2d(3, c[0], 3, padding=1), nn.BatchNorm2d(c[0]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[0], c[0], 3, padding=1), nn.BatchNorm2d(c[0]), nn.ReLU(inplace=True),
+        )
+        self.down2 = nn.Sequential(
+            nn.Conv2d(c[0], c[1], 3, padding=1), nn.BatchNorm2d(c[1]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[1], c[1], 3, padding=1), nn.BatchNorm2d(c[1]), nn.ReLU(inplace=True),
+        )
+        self.down3 = nn.Sequential(
+            nn.Conv2d(c[1], c[2], 3, padding=1), nn.BatchNorm2d(c[2]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[2], c[2], 3, padding=1), nn.BatchNorm2d(c[2]), nn.ReLU(inplace=True),
+        )
+        self.down4 = nn.Sequential(
+            nn.Conv2d(c[2], c[3], 3, padding=1), nn.BatchNorm2d(c[3]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[3], c[3], 3, padding=1), nn.BatchNorm2d(c[3]), nn.ReLU(inplace=True),
+        )
+        self.up3 = nn.ConvTranspose2d(c[3], c[2], 2, stride=2)
+        self.dec3 = nn.Sequential(
+            nn.Conv2d(c[2] * 2, c[2], 3, padding=1), nn.BatchNorm2d(c[2]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[2], c[2], 3, padding=1), nn.BatchNorm2d(c[2]), nn.ReLU(inplace=True),
+        )
+        self.up2 = nn.ConvTranspose2d(c[2], c[1], 2, stride=2)
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(c[1] * 2, c[1], 3, padding=1), nn.BatchNorm2d(c[1]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[1], c[1], 3, padding=1), nn.BatchNorm2d(c[1]), nn.ReLU(inplace=True),
+        )
+        self.up1 = nn.ConvTranspose2d(c[1], c[0], 2, stride=2)
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(c[0] * 2, c[0], 3, padding=1), nn.BatchNorm2d(c[0]), nn.ReLU(inplace=True),
+            nn.Conv2d(c[0], c[0], 3, padding=1), nn.BatchNorm2d(c[0]), nn.ReLU(inplace=True),
+        )
+        self.dropout = nn.Dropout(float(dropout))
+        self.head = nn.Conv2d(c[0], num_classes, 1)
+
+    def forward(self, x):
+        d1 = self.down1(x)
+        d2 = self.down2(nn.MaxPool2d(2)(d1))
+        d3 = self.down3(nn.MaxPool2d(2)(d2))
+        b = self.down4(nn.MaxPool2d(2)(d3))
+        torch = self._torch
+        u3 = self.dec3(torch.cat([self.up3(b), d3], dim=1))
+        u2 = self.dec2(torch.cat([self.up2(u3), d2], dim=1))
+        u1 = self.dec1(torch.cat([self.up1(u2), d1], dim=1))
+        return self.head(self.dropout(u1))
+
+
 class TextCNN(nn.Module):
     """TextCNN：Embedding -> 多尺寸 Conv1d -> 全局最大池化 -> 拼接 -> 全连接。"""
 
@@ -317,6 +372,14 @@ def build_model(task: str, model: str, params: dict | None = None, **dims: Any):
             return LightTransformer(num_tokens, d_model, nhead, num_layers, dim_ff,
                                     num_classes, dropout=dropout, max_seq_len=max_seq_len)
         raise ValueError(f"文本任务不支持的模型: {model}")
+    if task == "semantic_segmentation":
+        if model != "unet":
+            raise ValueError(f"语义分割不支持的模型: {model}")
+        return UNet(
+            num_classes,
+            base_channels=_int(p.get("base_channels"), 32, lo=8, hi=128),
+            dropout=_float(p.get("dropout"), 0.1, 0.0, 0.5),
+        )
     if task == "time_series_forecasting":
         in_features = _int(dims.get("num_features"), 1, lo=1, hi=100000)
         horizon = _int(p.get("horizon"), 1, lo=1, hi=128)

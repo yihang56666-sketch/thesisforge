@@ -329,8 +329,10 @@ def run_eda(ds_id: str) -> list[str]:
             for p in sorted(root.rglob("data.y*ml")):
                 yaml_path = p
                 break
-        classes: list[str] = []
-        if yaml_path is not None:
+        classes: list[str] = meta.get("classes") or []
+        if meta.get("data_format") == "pixel_masks":
+            pass
+        elif yaml_path is not None:
             try:
                 import yaml
                 spec = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
@@ -529,6 +531,23 @@ def _yolo_root(staging: Path) -> Path | None:
     return None
 
 
+def _pixel_mask_root(staging: Path) -> Path | None:
+    """定位像素级分割数据集根：images/ + masks/，支持 zip 单层同名目录。"""
+    def _is_mask(root: Path) -> bool:
+        if (root / "images").is_dir() and (root / "masks").is_dir():
+            return True
+        return any((root / "images" / sub).is_dir() and (root / "masks" / sub).is_dir()
+                   for sub in ("train", "valid", "val", "test"))
+
+    if staging.exists():
+        if _is_mask(staging):
+            return staging
+        dirs = [d for d in staging.iterdir() if d.is_dir()]
+        if len(dirs) == 1 and _is_mask(dirs[0]):
+            return dirs[0]
+    return None
+
+
 def import_bytes(filename: str, content: bytes) -> dict:
     """兼容入口：内存字节流导入。新代码优先用 import_path，避免整包驻留内存。"""
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -584,7 +603,27 @@ def import_path(filename: str, stored: Path) -> dict:
         except Exception as e:
             _fail(f"zip 解压失败: {e}")
         root = _yolo_root(staging)
-        if root is not None:
+        mask_root = _pixel_mask_root(staging)
+        if mask_root is not None:
+            for child in staging.iterdir():
+                shutil.move(str(child), ds_dir / child.name)
+            staging.rmdir()
+            data_root = ds_dir if mask_root == staging else ds_dir / mask_root.name
+            classes: list[str] = []
+            cls_file = data_root / "classes.txt"
+            if cls_file.exists():
+                classes = [line.strip() for line in cls_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+            n_masks = sum(1 for p in (data_root / "masks").rglob("*") if p.suffix.lower() in (".png", ".jpg", ".jpeg"))
+            meta = {
+                "id": ds_id, "name": Path(filename).stem, "source": "imported", "type": "image",
+                "task": "semantic_segmentation", "data_format": "pixel_masks", "target": None,
+                "columns": [], "created_at": _now(),
+                "desc": f"像素级语义分割数据集，{n_masks} 张图与掩码。",
+                "n_images": n_masks, "n_masks": n_masks,
+                "classes": classes or ["0", "1"],
+            }
+            _save_meta(ds_dir, meta)
+        elif root is not None:
             # YOLO 格式：images/ + labels/（或 data.yaml），保持原结构
             for child in staging.iterdir():
                 shutil.move(str(child), ds_dir / child.name)
