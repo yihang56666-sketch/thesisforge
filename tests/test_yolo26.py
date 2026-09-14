@@ -13,12 +13,18 @@ class Yolo26CatalogTest(unittest.TestCase):
         models = catalog.CATALOG["object_detection"]["models"]
         self.assertIn("yolo26n", models)
         self.assertIn("yolo26s", models)
+        self.assertIn("yolo26m", models)
+        self.assertIn("yolo26l", models)
+        self.assertIn("yolo26x", models)
         self.assertEqual(models["yolo26n"]["engine"], "ultralytics")
 
     def test_segmentation_catalog_has_yolo26(self):
         models = catalog.CATALOG["semantic_segmentation"]["models"]
         self.assertIn("yolo26n-seg", models)
         self.assertIn("yolo26s-seg", models)
+        self.assertIn("yolo26m-seg", models)
+        self.assertIn("yolo26l-seg", models)
+        self.assertIn("yolo26x-seg", models)
         self.assertEqual(models["yolo26n-seg"]["engine"], "ultralytics")
 
 
@@ -27,8 +33,14 @@ class Yolo26WeightMappingTest(unittest.TestCase):
         cases = {
             "yolo26n": "yolo26n.pt",
             "yolo26s": "yolo26s.pt",
+            "yolo26m": "yolo26m.pt",
+            "yolo26l": "yolo26l.pt",
+            "yolo26x": "yolo26x.pt",
             "yolo26n-seg": "yolo26n-seg.pt",
             "yolo26s-seg": "yolo26s-seg.pt",
+            "yolo26m-seg": "yolo26m-seg.pt",
+            "yolo26l-seg": "yolo26l-seg.pt",
+            "yolo26x-seg": "yolo26x-seg.pt",
         }
         for model, expected in cases.items():
             with self.subTest(model=model):
@@ -75,6 +87,23 @@ class Yolo26WeightMappingTest(unittest.TestCase):
         self.assertTrue(all(m["model"].startswith("local-") for m in found))
         self.assertTrue(any(m["task"] == "object_detection" for m in found))
         self.assertTrue(any(m["task"] == "semantic_segmentation" for m in found))
+
+    def test_scan_local_models_recognizes_yolo26_all_sizes(self, *_):
+        root = _isolate.scratch("yolo26-all-sizes")
+        model_dir = root / "models"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        for size in ("m", "l", "x"):
+            (model_dir / f"yolo26{size}.pt").write_bytes(b"stub")
+            (model_dir / f"yolo26{size}-seg.pt").write_bytes(b"stub")
+
+        found = model_scanner.scan_local_models([model_dir])
+
+        expected_detection = {f"yolo26{size}" for size in ("m", "l", "x")}
+        expected_segmentation = {f"yolo26{size}-seg" for size in ("m", "l", "x")}
+        detected_detection = {m["model"] for m in found if m["task"] == "object_detection"}
+        detected_segmentation = {m["model"] for m in found if m["task"] == "semantic_segmentation"}
+        self.assertEqual(detected_detection & expected_detection, expected_detection)
+        self.assertEqual(detected_segmentation & expected_segmentation, expected_segmentation)
 
     def test_local_model_spec_returns_weights_path(self, *_):
         root = _isolate.scratch("custom-model-spec")

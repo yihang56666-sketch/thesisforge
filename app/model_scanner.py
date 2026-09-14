@@ -25,8 +25,14 @@ _WEIGHT_PATTERNS = {
     "yolov8x": (r"(?:^|[-_])yolov8x(?=(?:\.|-)(?!seg))", "object_detection"),
     "yolo26n-seg": (r"(?:^|[-_])yolo26n-seg(?:\.|-)", "semantic_segmentation"),
     "yolo26s-seg": (r"(?:^|[-_])yolo26s-seg(?:\.|-)", "semantic_segmentation"),
+    "yolo26m-seg": (r"(?:^|[-_])yolo26m-seg(?:\.|-)", "semantic_segmentation"),
+    "yolo26l-seg": (r"(?:^|[-_])yolo26l-seg(?:\.|-)", "semantic_segmentation"),
+    "yolo26x-seg": (r"(?:^|[-_])yolo26x-seg(?:\.|-)", "semantic_segmentation"),
     "yolo26n": (r"(?:^|[-_])yolo26n(?=(?:\.|-)(?!seg))", "object_detection"),
     "yolo26s": (r"(?:^|[-_])yolo26s(?=(?:\.|-)(?!seg))", "object_detection"),
+    "yolo26m": (r"(?:^|[-_])yolo26m(?=(?:\.|-)(?!seg))", "object_detection"),
+    "yolo26l": (r"(?:^|[-_])yolo26l(?=(?:\.|-)(?!seg))", "object_detection"),
+    "yolo26x": (r"(?:^|[-_])yolo26x(?=(?:\.|-)(?!seg))", "object_detection"),
 }
 
 YOLO_PATTERNS = _WEIGHT_PATTERNS

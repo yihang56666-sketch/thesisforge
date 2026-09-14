@@ -364,6 +364,7 @@ function wizardNetworkPane(dsR, modelsR) {
         <div class="m-desc">${esc(m.desc)}</div>
         <div class="m-tag">${m.local ? "本机权重" : (m.engine === "torch" ? "神经网络" : "机器学习基线")}</div></div>`;
     }).join("")}</div>` : '<div class="hint">当前任务类型没有可用模型，请先检查数据集。</div>'}
+    <div class="hint mt8">本机 YOLO 权重放到 models/ 或 data/models/ 后重启即可扫描；也可用 THESISFORGE_MODEL_DIR 指定其他目录。</div>
     <b class="t mt14">网络结构参数</b>
     <div class="form-grid">${structureParams.length ? structureParams.map(([k, ps]) => row(k, ps)).join("")
       : '<div class="hint">这个模型没有结构参数，使用默认结构即可。</div>'}</div>

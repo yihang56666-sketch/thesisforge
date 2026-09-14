@@ -22,6 +22,17 @@ _TRAINING_PARAMS: dict = {
                "options": ["auto", "cpu", "gpu"], "label": "训练设备"},
 }
 
+_ULTRA_PARAMS: dict = {
+    "epochs": {"type": "int", "default": 50, "min": 1, "max": 500, "label": "训练轮数"},
+    "imgsz": {"type": "int", "default": 640, "min": 160, "max": 1280, "label": "图像尺寸"},
+    "batch_size": {"type": "int", "default": 16, "min": 1, "max": 128, "label": "批大小"},
+    "lr0": {"type": "float", "default": 0.01, "min": 0.00001, "max": 0.1, "label": "初始学习率"},
+    "patience": {"type": "int", "default": 20, "min": 0, "max": 200, "label": "早停耐心(0=关闭)"},
+    "seed": {"type": "int", "default": 42, "min": 0, "max": 999999, "label": "随机种子"},
+    "device": {"type": "choice", "default": "auto",
+               "options": ["auto", "cpu", "gpu"], "label": "训练设备"},
+}
+
 
 CATALOG: dict = {
     "tabular_classification": {
@@ -461,6 +472,26 @@ CATALOG: dict = {
         },
     },
 }
+
+_YOLO26_EXTRA_SIZES = {
+    "m": ("medium", "容量更大，适合较大检测/分割数据集与模型对比实验。"),
+    "l": ("large", "容量更大，适合较大数据集与模型对比实验。"),
+    "x": ("xlarge", "容量最大，适合大显存环境与模型对比实验。"),
+}
+
+for _size, (_name, _desc) in _YOLO26_EXTRA_SIZES.items():
+    CATALOG["object_detection"]["models"][f"yolo26{_size}"] = {
+        "label": f"YOLO26{_size.upper()} 目标检测",
+        "desc": f"Ultralytics YOLO26 { _name }，{ _desc }",
+        "engine": "ultralytics",
+        "params": dict(_ULTRA_PARAMS),
+    }
+    CATALOG["semantic_segmentation"]["models"][f"yolo26{_size}-seg"] = {
+        "label": f"YOLO26{_size.upper()}-seg 实例分割",
+        "desc": f"Ultralytics YOLO26 { _name } 分割模型，{ _desc }",
+        "engine": "ultralytics",
+        "params": dict(_ULTRA_PARAMS),
+    }
 
 
 def all_models_flat() -> list[dict]:

@@ -34,8 +34,14 @@ _WEIGHT_NAMES = {
     "rtdetr-l": "rtdetr-l.pt",
     "yolo26n": "yolo26n.pt",
     "yolo26s": "yolo26s.pt",
+    "yolo26m": "yolo26m.pt",
+    "yolo26l": "yolo26l.pt",
+    "yolo26x": "yolo26x.pt",
     "yolo26n-seg": "yolo26n-seg.pt",
     "yolo26s-seg": "yolo26s-seg.pt",
+    "yolo26m-seg": "yolo26m-seg.pt",
+    "yolo26l-seg": "yolo26l-seg.pt",
+    "yolo26x-seg": "yolo26x-seg.pt",
 }
 
 
