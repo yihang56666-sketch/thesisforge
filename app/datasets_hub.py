@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
 import shutil
+import statistics
 import zipfile
 from pathlib import Path
 
@@ -376,10 +378,12 @@ def run_eda(ds_id: str) -> list[str]:
     elif meta["type"] == "image":
         img_root = ds_dir / "images"
         counts, paths, labels = {}, [], []
+        audit_paths: list[Path] = []
         for cls_dir in sorted(img_root.iterdir()):
             if cls_dir.is_dir():
                 imgs = [p for p in cls_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".webp")]
                 counts[cls_dir.name] = len(imgs)
+                audit_paths.extend(imgs)
                 for p in imgs[:2]:
                     paths.append(str(p))
                     labels.append(cls_dir.name)
@@ -390,7 +394,8 @@ def run_eda(ds_id: str) -> list[str]:
             meta["n_images"] = int(sum(counts.values()))
             if paths:
                 files.append(Path(plots.plot_sample_images(paths, labels, eda_dir / "samples.png")).name)
-        meta["stats"] = {"class_counts": counts}
+        image_audit = _audit_images(audit_paths)
+        meta["stats"] = {"class_counts": counts, **image_audit}
         meta["n_rows"] = 0
         meta["columns"] = []
     else:
@@ -446,6 +451,15 @@ def _quality_warnings(meta: dict) -> list[str]:
 
     if meta.get("type") == "image":
         counts = stats.get("class_counts") or {}
+        bad_images = int(stats.get("bad_images") or 0)
+        duplicate_images = int(stats.get("duplicate_images") or 0)
+        size_outliers = int(stats.get("size_outliers") or 0)
+        if bad_images:
+            out.append(f"有 {bad_images} 张图像无法读取或损坏，训练前应删除或修复。")
+        if duplicate_images:
+            out.append(f"有 {duplicate_images} 张图像内容重复，建议在划分前去重，避免评估虚高。")
+        if size_outliers:
+            out.append(f"有 {size_outliers} 张图像尺寸异常，建议统一缩放或检查原始采集设置。")
         if counts:
             values = [int(v) for v in counts.values() if int(v) > 0]
             small = [k for k, v in counts.items() if int(v) < 20]
@@ -471,6 +485,38 @@ def _quality_warnings(meta: dict) -> list[str]:
                 out.append("类别分布不均，建议补充少数类样本，或同时报告宏平均 F1 与按类指标。")
         if 0 < n_rows < 200:
             out.append("样本规模较小，结论容易受数据划分影响，建议使用交叉验证或扩大样本。")
+    return out
+
+
+def _audit_images(paths: list[Path]) -> dict:
+    """检查常见图像数据问题：坏图、重复内容、异常尺寸。失败不阻断导入。"""
+    out = {"bad_images": 0, "duplicate_images": 0, "size_outliers": 0, "audited_images": len(paths)}
+    if not paths:
+        return out
+    sizes: list[tuple[int, int]] = []
+    hashes: dict[str, int] = {}
+    for path in paths:
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                img.verify()
+            with Image.open(path) as img:
+                sizes.append((int(img.width), int(img.height)))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            hashes[digest] = hashes.get(digest, 0) + 1
+        except Exception:
+            out["bad_images"] += 1
+    if hashes:
+        out["duplicate_images"] = int(sum(n - 1 for n in hashes.values() if n > 1))
+    if len(sizes) >= 3:
+        median_w = statistics.median(w for w, _ in sizes)
+        median_h = statistics.median(h for _, h in sizes)
+        for w, h in sizes:
+            if not median_w or not median_h:
+                continue
+            if abs(w - median_w) / median_w > 0.5 or abs(h - median_h) / median_h > 0.5:
+                out["size_outliers"] += 1
     return out
 
 

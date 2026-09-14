@@ -54,6 +54,14 @@ def validate_public_http_url(url: str) -> str:
         (".local", ".internal", ".localhost")
     ):
         raise SafeURLError(f"禁止访问内网主机: {host}")
+    # 十进制/十六进制等非常规 IP 写法先走 ipaddress，避免依赖系统解析器。
+    try:
+        ipaddress.ip_address(host)
+        _check_ip(host)
+    except SafeURLError:
+        raise
+    except ValueError:
+        pass
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError as e:

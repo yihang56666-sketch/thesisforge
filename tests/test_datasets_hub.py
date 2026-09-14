@@ -108,6 +108,38 @@ class BuiltinDemoTest(unittest.TestCase):
         self.assertIn("类别分布不均", text)
         self.assertIn("样本规模较小", text)
 
+    @unittest.skipUnless(HAS_PIL, "需要 Pillow 才能检查图像质量")
+    def test_eda_detects_image_corruption_duplicates_and_size_outliers(self):
+        import io
+        import zipfile
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            small = Image.new("RGB", (8, 8), "red")
+            tiny = io.BytesIO()
+            small.save(tiny, format="PNG")
+            small_bytes = tiny.getvalue()
+            zf.writestr("red/001.png", small_bytes)
+            zf.writestr("red/002.png", small_bytes)
+            zf.writestr("red/bad.png", b"not-an-image")
+            large = Image.new("RGB", (64, 64), "blue")
+            large_buf = io.BytesIO()
+            large.save(large_buf, format="PNG")
+            zf.writestr("blue/001.png", large_buf.getvalue())
+
+        meta = datasets_hub.import_bytes("image-quality.zip", buf.getvalue())
+        stats = meta["stats"]
+        warnings = "\n".join(meta.get("quality_warnings") or [])
+
+        self.assertEqual(stats["bad_images"], 1)
+        self.assertEqual(stats["duplicate_images"], 1)
+        self.assertEqual(stats["size_outliers"], 1)
+        self.assertIn("无法读取或损坏", warnings)
+        self.assertIn("内容重复", warnings)
+        self.assertIn("尺寸异常", warnings)
+
 
 if __name__ == "__main__":
     unittest.main()
