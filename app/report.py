@@ -374,6 +374,92 @@ def _task_methodology_notes(runs: list[dict]) -> list[str]:
     return notes
 
 
+def _run_analysis_text(run: dict, dataset_meta: dict | None, runs: list[dict]) -> str:
+    """为单个实验生成可复现的结果解读，替代简单的指标占位文案。"""
+    s = run.get("summary") or {}
+    metrics = s.get("metrics") or {}
+    pm = s.get("primary_metric") or {}
+    primary_name = str(pm.get("name") or (next(iter(metrics), "primary_metric")))
+    primary_value = pm.get("value")
+    if primary_value is None and metrics:
+        primary_value = metrics.get(primary_name, next(iter(metrics.values())))
+    try:
+        primary_value = float(primary_value)
+    except (TypeError, ValueError):
+        primary_value = 0.0
+    label = s.get("model_label", run.get("config", {}).get("model_label", "该模型"))
+    source = _run_eval_source(run)
+
+    parts = [f"在{source}上，{label}的主指标 {primary_name} = {primary_value:.4f}。"]
+    other_metrics = {k: v for k, v in metrics.items() if k != primary_name}
+    if other_metrics:
+        other_text = "；".join(
+            f"{k} = {v:.4f}" if isinstance(v, (int, float)) else f"{k} = {v}"
+            for k, v in other_metrics.items()
+        )
+        parts.append(f"其余指标为：{other_text}。")
+
+    base = _run_by_group(runs, "baseline")
+    if base and base is not run:
+        base_name, base_value = _primary_metric(base)
+        if base_name == primary_name:
+            delta = primary_value - base_value
+            parts.append(f"相比基线，{primary_name}变化 {delta:+.4f}，可用于判断改进是否真正有效。")
+
+    epochs = s.get("epochs") or []
+    if epochs:
+        last = epochs[-1]
+        train_acc = last.get("train_acc")
+        val_acc = last.get("val_acc")
+        if isinstance(train_acc, (int, float)) and isinstance(val_acc, (int, float)):
+            gap = train_acc - val_acc
+            if gap > 0.08:
+                parts.append(
+                    f"训练准确率 {train_acc:.4f} 与验证准确率 {val_acc:.4f} 相差 {gap:.4f}，"
+                    "存在过拟合迹象；可加强数据增强、提高权重衰减、增加 Dropout 或减小模型容量。"
+                )
+            elif gap < 0.02 and primary_value < 0.80:
+                parts.append(
+                    "训练与验证表现接近但主指标偏低，存在欠拟合迹象；可增加训练轮次、"
+                    "放宽正则化或扩大模型容量。"
+                )
+
+    if dataset_meta:
+        counts = (dataset_meta.get("stats") or {}).get("class_counts") or {}
+        if counts:
+            values = list(counts.values())
+            ratio = max(values) / max(min(values), 1)
+            if ratio >= 3:
+                parts.append(
+                    f"数据集存在类别不平衡（最多/最少类样本比约 {ratio:.1f}:1），"
+                    "不能只看准确率，应同时检查宏平均 F1、按类别的精确率与召回率。"
+                )
+            if "accuracy" in metrics and "macro_f1" in metrics:
+                try:
+                    acc = float(metrics["accuracy"])
+                    f1 = float(metrics["macro_f1"])
+                    if acc - f1 > 0.05:
+                        parts.append(
+                            f"准确率 {acc:.4f} 高于宏平均 F1 {f1:.4f}，说明部分类别表现偏弱；"
+                            "应结合混淆矩阵定位误分类来源，必要时使用类别权重或重采样。"
+                        )
+                except (TypeError, ValueError):
+                    pass
+
+    task = run.get("config", {}).get("task")
+    if task == "object_detection" and {"mAP50", "mAP50-95"} & set(metrics):
+        parts.append("mAP50 反映低阈值下能否检出目标，mAP50-95 更看重定位质量；"
+                     "两者差距大时，应检查边界框回归和密集小目标问题。")
+    elif task == "semantic_segmentation" and {"iou", "dice"} & set(metrics):
+        parts.append("IoU 与 Dice 更能反映目标区域重叠程度；两者偏低时应重点检查边界模糊、"
+                     "小目标和类别边界预测。")
+    elif task == "time_series_forecasting" and {"rmse", "mae"} <= set(metrics):
+        parts.append("RMSE 大于 MAE 时说明存在较大误差点；应结合预测曲线检查异常波动、"
+                     "滞后预测和极端值区间。")
+
+    return "".join(parts)
+
+
 def _repeat_notes(runs: list[dict]) -> list[str]:
     """汇总同一 batch 的重复实验，帮助判断性能波动是否可接受。"""
     grouped: dict[str, list[dict]] = {}
@@ -753,10 +839,7 @@ def build_report(
         if drafts.get(f"analysis:{r['run_id']}"):
             _md_to_paras(doc, drafts[f"analysis:{r['run_id']}"])
         elif s.get("metrics"):
-            ms = "；".join(f"{k} = {v:.4f}" if isinstance(v, float) else f"{k} = {v}" for k, v in s["metrics"].items())
-            src = {"test": "测试集", "val": "验证集"}.get(s.get("eval_source"), "评估集")
-            _para(doc, f"该模型在{src}上的表现为：{ms}。（配置 AI 接口后，此处将自动生成实验解读，"
-                       f"建议结合自己的理解重写。）")
+            _para(doc, _run_analysis_text(r, dataset_meta, runs))
 
     # ---------------- 第五章 总结
     _heading(doc, "第五章  总结与展望", 1)

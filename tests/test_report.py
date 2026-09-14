@@ -216,6 +216,35 @@ class ReportResearchDepthTest(unittest.TestCase):
         self.assertTrue(any("object detection" in t.lower() and "mAP50" in t for t in texts))
         self.assertTrue(any("bbox" in t and "mAP50" in t and "验证集" in t for t in texts))
 
+    def test_report_generates_run_level_analysis_without_placeholder(self):
+        runs = [
+            {
+                "run_id": "base", "name": "基线", "group": "baseline",
+                "config": {"task": "tabular_classification", "model": "logistic_regression",
+                           "model_label": "逻辑回归", "group": "baseline", "params": {}},
+                "summary": {"model_label": "逻辑回归", "group": "baseline",
+                            "primary_metric": {"name": "accuracy", "value": 0.80},
+                            "metrics": {"accuracy": 0.80}, "eval_source": "test"},
+            },
+            {
+                "run_id": "imp", "name": "改进", "group": "improved",
+                "config": {"task": "tabular_classification", "model": "mlp",
+                           "model_label": "MLP", "group": "improved", "params": {}},
+                "summary": {"model_label": "MLP", "group": "improved",
+                            "primary_metric": {"name": "accuracy", "value": 0.88},
+                            "metrics": {"accuracy": 0.88, "macro_f1": 0.72},
+                            "eval_source": "test",
+                            "epochs": [{"train_acc": 0.98, "val_acc": 0.81}]},
+            },
+        ]
+        dataset_meta = {"name": "示例分类集", "columns": ["x1", "x2"], "target": "label",
+                        "stats": {"class_counts": {"yes": 80, "no": 20}}}
+        texts = self._build(runs, dataset_meta)
+
+        self.assertFalse(any("配置 AI 接口后，此处将自动生成实验解读" in t for t in texts))
+        self.assertTrue(any("accuracy = 0.8800" in t and "macro_f1 = 0.7200" in t
+                            and "过拟合" in t and "类别不平衡" in t for t in texts))
+
 
 if __name__ == "__main__":
     unittest.main()
