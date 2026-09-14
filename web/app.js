@@ -423,6 +423,12 @@ async function pageTrain() {
 
   $("#page").innerHTML = `
     ${pageHead("02", "模型训练", "选数据集，选模型，表单里调参数，点一次按钮开始训练。训练在后台运行，可回到总览再做别的事。")}
+    <div class="train-summary">
+      <div class="summary-item"><span>数据集</span><b>${esc(ds ? ds.name : "未选择")}</b></div>
+      <div class="summary-item"><span>任务 / 模型</span><b>${esc(taskDef ? taskDef.label : "未选择")} · ${esc(taskDef && taskDef.models[t.model] ? taskDef.models[t.model].label : "默认")}</b></div>
+      <div class="summary-item"><span>划分</span><b>${t.testSize ?? 0.2}${isImage ? ` / ${t.valSplit ?? 0.2}` : ""} 测试${isImage ? " / 验证" : ""}</b></div>
+      <div class="summary-item"><span>随机种子</span><b>${esc(t.seed)}</b></div>
+    </div>
     <div class="steps">
       <span class="step-chip ${t.datasetId ? "active" : ""}"><span class="n">一</span>数据集</span>
       <span class="step-chip ${t.task ? "active" : ""}"><span class="n">二</span>任务类型</span>
@@ -433,7 +439,10 @@ async function pageTrain() {
         <div class="form-row"><label>数据集</label>
           <select id="tr-ds">${state.datasets.map((d) => `<option value="${esc(d.id)}" ${d.id === t.datasetId ? "selected" : ""}>${esc(d.name)}（${d.type === "image" ? "图像" : "表格"}）</option>`).join("") || "<option>请先到数据集页载入</option>"}</select></div>
         <div class="form-row"><label>任务类型</label>
-          <select id="tr-task">${Object.entries(state.models).filter(([k]) => (ds && ds.type === "image") === (k === "image_classification"))
+          <select id="tr-task">${Object.entries(state.models).filter(([k]) => {
+            if (ds && ds.task === "object_detection") return k === "object_detection";
+            return (ds && ds.type === "image") === (k === "image_classification");
+          })
             .map(([k, v]) => `<option value="${esc(k)}" ${k === t.task ? "selected" : ""}>${esc(v.label)}</option>`).join("")}</select></div>
       </div>
       <div id="tr-textcol"></div>
@@ -451,17 +460,18 @@ async function pageTrain() {
       <div class="form-row" style="margin-top:10px"><label>向导预处理策略（来自第 3 步，可直接沿用）</label>
         <div class="hint" id="tr-prep-note">${esc(prepTxt)}</div></div>
     </div>
-    <div class="section"><h2>选择模型</h2>
+    <div class="section"><div class="section-head"><h2>选择模型</h2><p>先选一个可解释的基线，再换更强模型对比。浅色高亮表示当前选中。</p></div>
       <div class="model-grid">${modelKeys.map((k) => {
         const m = taskDef.models[k];
         return `<div class="model-item ${k === t.model ? "selected" : ""}" data-model="${esc(k)}">
-          <div class="m-name">${esc(m.label)}</div><div class="m-desc">${esc(m.desc)}</div></div>`;
+          <div class="m-row"><div class="m-name">${esc(m.label)}</div>${k === t.model ? '<span class="m-check">已选</span>' : ""}</div>
+          <div class="m-desc">${esc(m.desc)}</div></div>`;
       }).join("")}</div>
     </div>
-    <div class="section"><h2>超参数</h2>
+    <div class="section"><div class="section-head"><h2>超参数</h2><p>不改也能直接训练；想只改一两个变量时，其他字段保持推荐值即可。</p></div>
       <div class="panel"><div class="form-grid" id="tr-params-form"></div></div>
     </div>
-    <div class="section"><h2>自动调参</h2>
+    <div class="section"><div class="section-head"><h2>自动调参</h2><p>适合不确定超参数范围时使用。每个候选都会真实训练一次，结果不会自动加入实验列表。</p></div>
       <div class="panel">
         <div class="form-grid">
           <div class="form-row"><label>搜索轮数</label>
@@ -488,7 +498,7 @@ async function pageTrain() {
         <div id="tu-results"></div>
       </div>
     </div>
-    <div class="section"><h2>实验命名与分组</h2>
+    <div class="section"><div class="section-head"><h2>实验命名与分组</h2><p>论文对比表和消融表会按分组整理，起名越具体后面越好找。</p></div>
       <div class="panel">
         <div class="form-grid">
           <div class="form-row"><label>实验名称（可选）</label><input id="tr-name" maxlength="80" value="${esc(t.name || "")}" placeholder="如：基线：逻辑回归"></div>
