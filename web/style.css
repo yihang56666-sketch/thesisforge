@@ -470,6 +470,15 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 .wz-env-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
 .wz-env-grid .kv b { font-size: 15px; }
 .wz-write-out { border-left: 3px solid var(--accent); background: #fbfdfc; border-radius: 4px; padding: 12px 16px; }
+.readiness-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
+.readiness-item {
+  border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 4px;
+  padding: 10px 12px; background: #fbfbf9; line-height: 1.6;
+}
+.readiness-item b { margin-right: 8px; font-size: 12.5px; }
+.readiness-item .small { margin-top: 4px; }
+.readiness-ok { border-color: #b7ccb8; background: #f4faf4; }
+.readiness-blocking { border-color: #d9b65e; background: #fdf6e9; }
 
 @media (max-width: 900px) {
   .wizard-page { padding: 20px 14px 70px; }

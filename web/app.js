@@ -1047,9 +1047,33 @@ async function pageReport() {
   state.reportSelected = state.reportSelected.filter((rid) => doneRuns.some((r) => r.run_id === rid));
   saveReportSel();
   state.datasets = dsR.datasets; state.reports = repR.reports;
+  const readiness = async () => {
+    const ids = [...document.querySelectorAll(".rp-run:checked")].map((c) => c.value);
+    const box = $("#rp-readiness");
+    if (!box) return;
+    try {
+      const r = await api("/api/report/readiness", { method: "POST", body: {
+        title: $("#rp-title").value.trim() || "基于机器学习的毕业设计研究",
+        run_ids: ids, dataset_id: $("#rp-ds").value || null,
+        author: { school: $("#rp-school").value, college: $("#rp-college").value, major: $("#rp-major").value, name: $("#rp-name").value, student_id: $("#rp-sid").value, advisor: $("#rp-advisor").value },
+      }});
+      const labels = { ok: "就绪", warn: "建议", fail: "阻断" };
+      const colors = { ok: "var(--ok)", warn: "var(--warn)", fail: "var(--danger)" };
+      box.innerHTML = `<div class="panel ${r.blocking ? "readiness-blocking" : "readiness-ok"}">
+        <div class="row-flex"><b class="t">交付前自检</b>
+          <span class="muted">${r.blocking ? "有阻断项，先补齐再生成最终版" : "无阻断项，生成前可参考建议"}</span></div>
+        <div class="readiness-grid mt12">${r.checks.map((c) => `
+          <div class="readiness-item" style="border-left-color:${colors[c.status]}">
+            <b>${esc(c.label)}</b><span class="muted">${labels[c.status]}</span>
+            <div class="small">${esc(c.message)}</div>
+          </div>`).join("")}</div>
+      </div>`;
+    } catch (e) { box.innerHTML = `<div class="small" style="color:var(--danger)">交付自检失败：${esc(e.message)}</div>`; }
+  };
   $("#page").innerHTML = `
     ${pageHead("04", "报告工坊", "勾选实验与数据集，按毕业论文的章节结构生成 Word 初稿：目录、中英文摘要、绪论、相关技术、数据与预处理、实验与结果分析（三线表 + 自动插图）、总结、参考文献（GB/T 7714）、致谢。")}
-    <div class="form-grid">
+    <div id="rp-readiness" class="mt14"></div>
+    <div class="form-grid mt14">
       <div class="panel">
         <b class="t">论文信息</b>
         <div class="form-row"><label>论文题目</label><input id="rp-title" value="基于机器学习的毕业设计研究"></div>
@@ -1113,7 +1137,13 @@ async function pageReport() {
   document.querySelectorAll(".rp-run").forEach((cb) => cb.onchange = () => {
     state.reportSelected = [...document.querySelectorAll(".rp-run:checked")].map((c) => c.value);
     saveReportSel();
+    readiness();
   });
+  ["#rp-title", "#rp-school", "#rp-college", "#rp-major", "#rp-name", "#rp-sid", "#rp-advisor", "#rp-ds"].forEach((sel) => {
+    $(sel).onchange = readiness;
+  });
+  $("#rp-title").oninput = readiness;
+  await readiness();
   $("#btn-report").onclick = async () => {
     const ids = [...document.querySelectorAll(".rp-run:checked")].map((c) => c.value);
     if (!ids.length) return toast("请至少勾选一个已完成实验写入第四章", "error");

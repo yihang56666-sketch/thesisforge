@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, prep, report, runner, tuning
+from .report_readiness import report_readiness
 from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
     ensure_dirs, load_runtime_config, resolve_api_key, save_runtime_config,
@@ -886,6 +887,30 @@ class ReportReq(BaseModel):
     dataset_id: str | None = None
     author: dict = {}
     ai_draft: bool = False
+
+
+@app.post("/api/report/readiness")
+def report_delivery_readiness(req: ReportReq):
+    runs = []
+    for rid in req.run_ids[:6]:
+        try:
+            d = runner.run_detail(rid)
+        except (ValueError, FileNotFoundError):
+            continue
+        if d["state"] != "done" or not d["summary"]:
+            continue
+        runs.append({
+            "run_id": rid, "config": d["config"], "summary": d["summary"],
+            "name": d["config"].get("name"), "group": d["config"].get("group"),
+        })
+
+    dataset_meta = None
+    if req.dataset_id:
+        try:
+            dataset_meta = datasets_hub.load_meta(req.dataset_id)
+        except (FileNotFoundError, HTTPException):
+            pass
+    return report_readiness(req.title, req.author or {}, dataset_meta, runs)
 
 
 @app.post("/api/report/generate")
