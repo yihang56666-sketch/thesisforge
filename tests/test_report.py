@@ -117,6 +117,32 @@ class ReportResearchDepthTest(unittest.TestCase):
 
         self.assertTrue(any("重复实验" in t and "0.930" in t and "0.020" in t for t in texts))
 
+    def test_semantic_segmentation_report_describes_pixel_method_and_artifact(self):
+        import io
+        from PIL import Image
+
+        run_dir = Path(tempfile.mkdtemp())
+        img = Image.new("RGB", (8, 8), "white")
+        img.save(run_dir / "segmentation_prediction.png")
+        runs = [{
+            "run_id": "seg", "name": "U-Net", "group": "baseline",
+            "run_dir": str(run_dir),
+            "config": {"task": "semantic_segmentation", "model": "unet",
+                       "model_label": "U-Net 语义分割", "group": "baseline", "params": {}},
+            "summary": {"model_label": "U-Net 语义分割", "group": "baseline",
+                        "primary_metric": {"name": "iou", "value": 0.78},
+                        "metrics": {"iou": 0.78, "dice": 0.86, "pixel_accuracy": 0.92},
+                        "eval_source": "test"},
+        }]
+        out = Path(tempfile.mkdtemp()) / "report.docx"
+        build_report(out, "基于深度学习的水面语义分割", {}, {"name": "示例分割集", "columns": [], "target": "mask"}, None, runs, {})
+        doc = Document(str(out))
+        texts = [p.text for p in doc.paragraphs]
+
+        self.assertTrue(any("像素级" in t and "IoU" in t and "Dice" in t for t in texts))
+        self.assertTrue(any("U-Net" in t and "编码器" in t and "解码器" in t for t in texts))
+        self.assertTrue(len(doc.inline_shapes) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
