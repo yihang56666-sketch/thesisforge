@@ -42,6 +42,55 @@ def _write_sklearn_config(run_dir: Path, dataset_dir: Path) -> None:
 
 
 class ExportedPredictScriptTest(unittest.TestCase):
+    def test_ultralytics_export_script_helps_without_forge_app(self):
+        from app.export_predict import write_predict_script
+
+        run_dir = _run_dir("ultralytics")
+        script = write_predict_script(run_dir, "ultralytics", {
+            "task": "object_detection",
+            "model": "yolov8n",
+            "params": {"epochs": 1, "imgsz": 32, "batch_size": 1, "conf": 0.25},
+        })
+
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("--image", text)
+        self.assertIn("best.pt", text)
+        self.assertNotIn("app.networks", text)
+
+        stub = _run_dir("ultralytics-stub")
+        (stub / "ultralytics").mkdir()
+        (stub / "ultralytics" / "__init__.py").write_text(
+            "class YOLO:\n"
+            "    def __init__(self, *args, **kwargs):\n"
+            "        raise RuntimeError('help should not load weights')\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(stub)
+        proc = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=run_dir, env=env, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-1200:])
+        self.assertIn("--image", proc.stdout)
+
+    def test_ultralytics_segmentation_script_uses_rtdetr_or_yolo_template(self):
+        from app.export_predict import write_predict_script
+
+        detection = write_predict_script(_run_dir("ultralytics-det"), "ultralytics", {
+            "task": "object_detection", "model": "yolov8n", "params": {},
+        })
+        segmentation = write_predict_script(_run_dir("ultralytics-seg"), "ultralytics", {
+            "task": "semantic_segmentation", "model": "yolov8n-seg", "params": {},
+        })
+        rtdetr = write_predict_script(_run_dir("ultralytics-rtdetr"), "ultralytics", {
+            "task": "object_detection", "model": "rtdetr-l", "params": {},
+        })
+
+        self.assertIn("from ultralytics import YOLO", detection.read_text(encoding="utf-8"))
+        self.assertIn("masks", segmentation.read_text(encoding="utf-8"))
+        self.assertIn("from ultralytics import RTDETR", rtdetr.read_text(encoding="utf-8"))
+
     def test_sklearn_export_can_infer_new_row(self):
         run_dir = _run_dir("sklearn")
         dataset_dir = run_dir / "dataset"

@@ -171,6 +171,13 @@ def main() -> int:
         if weights_path.exists():
             shutil.copy2(weights_path, safe(run_dir, "best.pt"))
             artifacts.append("best.pt")
+            try:
+                from app.export_predict import write_predict_script
+
+                write_predict_script(run_dir, "ultralytics", cfg)
+                artifacts.append("predict.py")
+            except Exception:
+                log("predict.py 导出失败，训练结果不受影响")
             summary["artifacts"] = artifacts
             log("最佳模型已保存: best.pt")
         write_json(safe(run_dir, "summary.json"), summary)

@@ -234,10 +234,100 @@ if __name__ == "__main__":
 '''
 
 
+def _ultralytics_template(cfg: dict) -> str:
+    task = cfg.get("task")
+    model = cfg.get("model")
+    params = cfg.get("params") or {}
+    return f'''# -*- coding: utf-8 -*-
+"""自动生成的推理脚本:用同目录 best.pt 对一张图片做检测/分割预测。
+
+用法:
+  python predict.py --image 图片.png
+
+输出:
+  终端打印 JSON,包含检测框、类别、置信度;分割任务还包含掩码数量。
+  可视化结果保存到同目录 predict_output/ 下。
+"""
+import argparse
+import json
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+TASK = {_literal(task)}
+MODEL = {_literal(model)}
+PARAMS = {_literal(params)}
+
+
+def load_model():
+    weights = HERE / "best.pt"
+    if not weights.exists():
+        raise SystemExit("找不到 best.pt,请把它和 predict.py 放在同一目录")
+    if str(MODEL).startswith("rtdetr"):
+        from ultralytics import RTDETR
+        return RTDETR(str(weights))
+    from ultralytics import YOLO
+    return YOLO(str(weights))
+
+
+def predict(image_path: str, conf: float):
+    model = load_model()
+    out_dir = HERE / "predict_output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = model.predict(
+        source=image_path,
+        save=True,
+        save_txt=True,
+        project=str(out_dir),
+        name="predict",
+        exist_ok=True,
+        conf=conf,
+        device=PARAMS.get("device", "auto"),
+    )
+    if not results:
+        return {{"image": image_path, "boxes": [], "classes": [], "confidence": [], "masks": 0}}
+
+    result = results[0]
+    boxes = result.boxes
+    class_names = getattr(model, "names", {{}}) or {{}}
+    payload = {{
+        "image": image_path,
+        "output_dir": str(out_dir / "predict"),
+        "boxes": [box.tolist() for box in boxes.xywh.tolist()],
+        "classes": [
+            class_names.get(int(index), str(int(index)))
+            for index in boxes.cls.tolist()
+        ],
+        "confidence": [round(float(value), 4) for value in boxes.conf.tolist()],
+        "masks": 0,
+    }}
+    if TASK == "semantic_segmentation" and result.masks is not None:
+        payload["masks"] = len(result.masks)
+    return payload
+
+
+def main():
+    parser = argparse.ArgumentParser(description="用导出的 best.pt 做单张图片预测")
+    parser.add_argument("--image", required=True, help="待预测图片路径")
+    parser.add_argument("--conf", type=float, default=float(PARAMS.get("conf", 0.25)),
+                        help="置信度阈值")
+    args = parser.parse_args()
+    print(json.dumps(predict(args.image, args.conf), ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
 def write_predict_script(run_dir: Path, engine: str, cfg: dict) -> Path:
     """按训练引擎生成 predict.py,返回脚本路径。"""
     run_dir = Path(run_dir).resolve()
-    text = _torch_template(cfg) if engine == "torch" else _sklearn_template(cfg)
+    if engine == "ultralytics":
+        text = _ultralytics_template(cfg)
+    elif engine == "torch":
+        text = _torch_template(cfg)
+    else:
+        text = _sklearn_template(cfg)
     path = run_dir / "predict.py"
     path.write_text(text, encoding="utf-8")
     return path
