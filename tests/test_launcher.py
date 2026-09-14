@@ -40,5 +40,24 @@ class LauncherRuntimeArgsTest(unittest.TestCase):
         self.assertNotIn("THESISFORGE_NO_BROWSER", env)
 
 
+class PackagingWorkerDispatchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.mod = _load_entry()
+
+    def test_semantic_worker_is_allowed(self) -> None:
+        captured = []
+
+        with mock.patch("importlib.util.find_spec", return_value=object()), \
+             mock.patch("runpy.run_module", side_effect=lambda *args, **kwargs: captured.append(list(sys.argv))), \
+             mock.patch.object(sys, "argv", ["ThesisForge.exe"]):
+            rc = self.mod._worker(["train_semantic.py", "--run-dir", "runs/demo"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured, [["train_semantic.py", "--run-dir", "runs/demo"]])
+
+    def test_unknown_worker_is_rejected(self) -> None:
+        rc = self.mod._worker(["not_a_worker.py"])
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
