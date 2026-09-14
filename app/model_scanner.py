@@ -77,6 +77,9 @@ def scan_local_models(extra_dirs: list[Path] | None = None) -> list[dict]:
         for p in root.rglob("*.pt"):
             if p in seen or not p.is_file():
                 continue
+            name = p.name.lower()
+            if name in {"best.pt", "last.pt"}:
+                continue
             seen.add(p)
             model, task, known = _model_for(p.name)
             if model and task:
