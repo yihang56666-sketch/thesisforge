@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, prep, report, runner
+from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, prep, report, runner, tuning
 from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
     ensure_dirs, load_runtime_config, resolve_api_key, save_runtime_config,
@@ -522,6 +522,64 @@ def get_models():
     return {"catalog": catalog.CATALOG}
 
 
+class TuningReq(BaseModel):
+    task: str
+    model: str
+    params: dict = {}
+    dataset_id: str
+    n_trials: int = 10
+    metric: str = "primary_metric"
+    search_mode: str = "tpe"
+    seed: int = 42
+
+
+@app.post("/api/tuning/search")
+def tuning_search(req: TuningReq):
+    spec = catalog.get_model_spec(req.task, req.model)
+    if not spec:
+        raise HTTPException(400, "未知任务或模型")
+    try:
+        ds_meta = datasets_hub.load_meta(req.dataset_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "数据集不存在")
+    ds_dir = ds_dir_of(req.dataset_id)
+    target = req.params.get("target") if isinstance(req.params, dict) else None
+    if not target:
+        target = ds_meta.get("target") or (ds_meta.get("columns") or [None])[-1]
+    if req.task != "image_classification" and not target:
+        raise HTTPException(400, "数据集缺少标签列，请先重新导入")
+
+    clean_params = catalog.sanitize_params(spec, req.params)
+    base_config = {
+        "dataset_id": req.dataset_id,
+        "dataset_name": ds_meta.get("name"),
+        "dataset_dir": str(ds_dir),
+        "task": req.task,
+        "model": req.model,
+        "model_label": spec["label"],
+        "params": clean_params,
+        "target": target,
+        "test_size": 0.2,
+        "val_split": 0.2,
+        "random_state": int(req.seed),
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        return tuning.run_search(
+            task=req.task,
+            model=req.model,
+            base_config=base_config,
+            n_trials=req.n_trials,
+            metric=req.metric,
+            search_mode=req.search_mode,
+            seed=req.seed,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"自动调参失败：{e}")
+
+
 # ================================================================ 实验
 class CreateRunReq(BaseModel):
     dataset_id: str
@@ -554,6 +612,8 @@ def create_run(req: CreateRunReq):
     task = req.task
     if task == "tabular_classification" and ds_meta["type"] != "tabular":
         raise HTTPException(400, "该数据集不是表格数据")
+    if task == "time_series_forecasting" and ds_meta["type"] != "tabular":
+        raise HTTPException(400, "时间序列预测需要表格数据（CSV，含目标列）")
     if task == "image_classification" and ds_meta["type"] != "image":
         raise HTTPException(400, "该任务需要图像数据集（zip，类别文件夹结构）")
     if task == "text_classification":

@@ -131,6 +131,31 @@ class ExperimentApiTest(unittest.TestCase):
                 self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(scripts, ["train_sklearn.py", "train_torch.py"])
 
+    def test_create_time_series_run_on_tabular(self):
+        captured = {}
+
+        def fake_create(config, script):
+            captured["config"] = config
+            captured["script"] = script
+            rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            d = runner.run_dir_of(rid)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "config.json").write_text(json.dumps(config, ensure_ascii=False),
+                                           encoding="utf-8")
+            (d / "status.json").write_text(json.dumps({"state": "running"}),
+                                           encoding="utf-8")
+            return rid
+
+        with mock.patch.object(runner, "create_run", side_effect=fake_create):
+            r = self.client.post("/api/runs", json={
+                "dataset_id": "apitest-ds", "task": "time_series_forecasting",
+                "model": "lstm", "params": {"lookback": 4, "horizon": 1},
+                "name": "时序基线", "group": "baseline",
+            }, headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(captured["config"]["task"], "time_series_forecasting")
+        self.assertEqual(captured["script"], "train_torch.py")
+
     def test_patch_meta_updates_config(self):
         rid = "20260913-101500-ca1a1a"
         _make_run(rid, name="旧名字", group="baseline", note="旧备注")

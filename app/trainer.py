@@ -31,11 +31,15 @@ DEFAULT_STRATEGY: dict = {
     "weight_decay": 0.0,
     "early_stop_patience": 0,
     "grad_clip": 0.0,
+    "test_size": 0.2,
+    "val_split": 0.2,
     "seed": 42,
     "device": "auto",
     "image_size": 64,
     "max_seq_len": 128,
     "vocab_size": 5000,
+    "lookback": 12,
+    "horizon": 1,
 }
 
 _OPTIMIZER_KEYS = {"sgd", "sgd_momentum", "adam", "adamw", "rmsprop"}
@@ -174,9 +178,13 @@ def strategy(config: dict) -> dict:
     out["early_stop_patience"] = _int(out["early_stop_patience"], 0, 0, 10000)
     out["grad_clip"] = _num(out["grad_clip"], 0.0, 0.0, 1000.0)
     out["seed"] = _int(out["seed"], 42, 0, 2**31 - 1)
+    out["test_size"] = _num(out["test_size"], 0.2, 0.0, 0.5)
+    out["val_split"] = _num(out["val_split"], 0.2, 0.0, 0.5)
     out["image_size"] = _int(out["image_size"], 64, 16, 224)
     out["max_seq_len"] = _int(out["max_seq_len"], 128, 4, 2048)
     out["vocab_size"] = _int(out["vocab_size"], 5000, 8, 200000)
+    out["lookback"] = _int(out["lookback"], 12, 2, 512)
+    out["horizon"] = _int(out["horizon"], 1, 1, 128)
     return out
 
 
@@ -483,8 +491,77 @@ def _load_image(config: dict, st: dict, device, emit):
         "demo": {
             "kind": "image",
             "path": str(full.samples[demo_idx][0]),
-            "class": classes[int(full.samples[demo_idx][1])],
+        "class": classes[int(full.samples[demo_idx][1])],
         },
+    }
+
+
+def _load_time_series(config: dict, st: dict, device, emit):
+    """时间序列数据：时间顺序划分 + 滑窗，避免随机划分造成未来信息泄漏。"""
+    path = Path(config["dataset_dir"]) / "dataset.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"数据文件不存在: {path}")
+    frame = pd.read_csv(path)
+    target = config.get("target") or (frame.columns or [None])[-1]
+    if target not in frame.columns:
+        raise ValueError(f"目标列 {target} 不在数据集中")
+    y_values = pd.to_numeric(frame[target], errors="coerce")
+    if y_values.isna().any():
+        raise ValueError("时间序列目标列必须全部为数值")
+    features = frame.select_dtypes(include=[np.number]).copy()
+    if target not in features.columns:
+        features[target] = y_values.to_numpy(dtype=np.float32)
+    features = features.loc[:, features.columns.drop_duplicates()]
+    values = features.to_numpy(dtype=np.float32)
+    lookback = int(st["lookback"])
+    horizon = int(st["horizon"])
+    if len(values) < lookback + horizon + 2:
+        raise ValueError("时间序列样本不足，无法完成回看窗口、预测步数和训练/验证/测试划分")
+
+    test_n = max(1, int(round(len(values) * float(st["test_size"]))))
+    val_n = max(1, int(round(len(values) * float(st["val_split"]))))
+    train_end = len(values) - test_n - val_n
+    if train_end <= 0:
+        raise ValueError("测试/验证比例过大，时间序列训练段为空")
+    raw_train, raw_val, raw_test = (
+        values[:train_end], values[train_end:train_end + val_n], values[-test_n:]
+    )
+    mean = raw_train.mean(axis=0)
+    std = raw_train.std(axis=0)
+    std[std < 1e-8] = 1.0
+    train = ((raw_train - mean) / std).astype(np.float32)
+    val = ((raw_val - mean) / std).astype(np.float32)
+    test = ((raw_test - mean) / std).astype(np.float32)
+
+    torch = _torch()
+
+    def make_windows(arr: np.ndarray):
+        xs, ys = [], []
+        for i in range(len(arr) - lookback - horizon + 1):
+            xs.append(arr[i:i + lookback])
+            ys.append(arr[i + lookback:i + lookback + horizon, -1])
+        return torch.tensor(np.stack(xs)), torch.tensor(np.stack(ys))
+
+    splits = [make_windows(arr) for arr in (train, val, test)]
+    loaders = [
+        torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(x, y),
+            batch_size=int(st["batch_size"]), shuffle=False,
+        ) for x, y in splits
+    ]
+    emit({"type": "data", "n_raw": int(len(values)), "lookback": lookback, "horizon": horizon,
+          "n_train": int(splits[0][0].shape[0]), "n_val": int(splits[1][0].shape[0]),
+          "n_test": int(splits[2][0].shape[0]), "target": target,
+          "features": list(features.columns)})
+    _log(f"时间序列划分: raw={len(values)}, train={splits[0][0].shape[0]}, "
+         f"val={splits[1][0].shape[0]}, test={splits[2][0].shape[0]}; "
+         f"lookback={lookback}, horizon={horizon}")
+    return {
+        "train": loaders[0], "val": loaders[1], "test": loaders[2],
+        "feature_names": list(features.columns), "target_name": target,
+        "num_features": int(values.shape[1]), "lookback": lookback, "horizon": horizon,
+        "scale_mean": mean.tolist(), "scale_std": std.tolist(),
+        "split_scheme": "chronological train/val/test",
     }
 
 
@@ -496,6 +573,8 @@ def _load_data(config: dict, st: dict, device, emit) -> dict:
         return _load_text(config, st, device, emit)
     if task == "image_classification":
         return _load_image(config, st, device, emit)
+    if task == "time_series_forecasting":
+        return _load_time_series(config, st, device, emit)
     raise ValueError(f"未知任务类型: {task}")
 
 
@@ -601,6 +680,25 @@ def _plot_pred_true(y_true, y_pred, path) -> None:
     plt.close(fig)
 
 
+def _plot_time_series(y_true, y_pred, target_name: str, mean: float, std: float, path) -> None:
+    """把标准化后的测试预测还原到原始量纲并绘制真实/预测对比曲线。"""
+    import matplotlib.pyplot as plt
+
+    y_true = np.asarray(y_true, dtype=float).reshape(-1) * std + mean
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1) * std + mean
+    fig, ax = plt.subplots(figsize=(7.5, 4.2))
+    ax.plot(y_true, label="真实值", color="#2c7be5", linewidth=2)
+    ax.plot(y_pred, label="预测值", color="#ff7f50", linewidth=2, linestyle="--")
+    ax.set_xlabel("时间步")
+    ax.set_ylabel(str(target_name))
+    ax.set_title("时间序列真实值 vs 预测值")
+    ax.legend()
+    ax.grid(alpha=0.25, linestyle="--")
+    fig.tight_layout()
+    fig.savefig(path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _save_best(net, data: dict, epoch: int, val_metric: float, path: Path, task: str,
                model: str, params: dict, device, image_size=None) -> None:
     torch = _torch()
@@ -636,7 +734,7 @@ def _save_demo(run_dir: Path, data: dict, net, device, cfg: dict) -> dict | None
     with torch.no_grad():
         logits = net(x)
     task = cfg.get("task")
-    classification = task != "tabular_regression"
+    classification = task in ("tabular_classification", "text_classification", "image_classification")
     out = {
         "task": task,
         "model": cfg.get("model"),
@@ -673,6 +771,68 @@ def _save_demo(run_dir: Path, data: dict, net, device, cfg: dict) -> dict | None
     return out
 
 
+def _generate_explanations(run_dir: Path, data: dict, net, cfg: dict, final_loader,
+                           classification: bool, artifacts: list[str]) -> None:
+    """按任务生成解释图；解释失败只记录日志，不改变训练结果。"""
+    torch = _torch()
+    task = cfg.get("task")
+    model_key = cfg.get("model")
+    original_device = next(net.parameters()).device
+    try:
+        if task == "image_classification":
+            xb = next(iter(final_loader))[0].to(next(net.parameters()).device)
+            from app.explain import plot_grad_cam_examples
+
+            plot_grad_cam_examples(
+                net, xb, _safe(run_dir, "grad_cam.png"),
+                classes=data.get("classes"),
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225],
+            )
+            artifacts.extend(["grad_cam.png"])
+            _log("已生成 Grad-CAM 解释图: grad_cam.png")
+
+        elif task == "text_classification":
+            xb = next(iter(final_loader))[0].to(next(net.parameters()).device)
+            from app.explain import plot_token_attribution, token_attribution
+
+            inv_vocab = {int(i): token for token, i in (data.get("vocab") or {}).items()}
+            tokens = [inv_vocab.get(int(v), "<pad>" if int(v) == 0 else f"#{int(v)}")
+                      for v in xb[0].tolist()]
+            attributions = token_attribution(net, xb, tokens=tokens)
+            _write_json(_safe(run_dir, "token_attribution.json"),
+                        {"task": task, "model": model_key, "attributions": attributions})
+            artifacts.append("token_attribution.json")
+            plot = plot_token_attribution(attributions, _safe(run_dir, "token_attribution.png"))
+            if plot:
+                artifacts.append("token_attribution.png")
+            _log("已生成文本 token 归因解释")
+
+        elif task in ("tabular_classification", "tabular_regression") and model_key == "mlp":
+            net = net.to(torch.device("cpu"))
+            from app.explain import permutation_importance
+
+            feature_names = None
+            pre = data.get("preprocessor")
+            if pre is not None and hasattr(pre, "get_feature_names_out"):
+                feature_names = [str(v) for v in pre.get_feature_names_out()]
+            importance = permutation_importance(
+                net, final_loader, _safe(run_dir, "permutation_importance.png"),
+                classification=classification, feature_names=feature_names,
+                seed=int(cfg.get("params", {}).get("seed", 42)),
+            )
+            if importance:
+                _write_json(_safe(run_dir, "permutation_importance.json"),
+                            {"task": task, "model": model_key, "importance": importance})
+                artifacts.extend(["permutation_importance.png", "permutation_importance.json"])
+                _log("已生成表格置换重要性解释")
+            else:
+                _log("置换重要性无有效信号，解释图跳过")
+    except Exception as e:
+        _log(f"模型解释生成跳过: {e}")
+    finally:
+        net.to(original_device)
+
+
 def fit(config: dict, run_dir) -> dict:
     """按 config 训练并把产物写入 run_dir；失败时上抛异常，由入口统一写 failed。"""
     torch = _torch()
@@ -703,7 +863,7 @@ def fit(config: dict, run_dir) -> dict:
     _log(f"设备: {device}" + (f"（GPU {torch.cuda.get_device_name(0)}）" if device.type == "cuda" else ""))
 
     data = _load_data(cfg, st, device, emit)
-    classification = task != "tabular_regression"
+    classification = task in ("tabular_classification", "text_classification", "image_classification")
     if classification:
         num_classes = len(data["classes"])
     else:
@@ -799,6 +959,8 @@ def fit(config: dict, run_dir) -> dict:
     ev = _evaluate(net, final_loader, criterion, device, classification)
     n_eval = len(final_loader.dataset)
 
+    _generate_explanations(run_dir, data, net, cfg, final_loader, classification, artifacts)
+
     if classification:
         classes = data["classes"]
         labels_all = sorted(set(ev["labels"]) | set(ev["preds"]))
@@ -857,7 +1019,7 @@ def fit(config: dict, run_dir) -> dict:
             "classes": classes, "num_classes": len(classes),
             "n_train": len(data["train"].dataset), "n_val": len(data["val"].dataset),
             "n_test": len(data["test"].dataset) if data["test"] is not None else 0,
-            "split_scheme": "train/val/test" if data["test"] is not None and len(data["test"].dataset) else "train/val",
+            "split_scheme": data.get("split_scheme") or ("train/val/test" if data["test"] is not None and len(data["test"].dataset) else "train/val"),
             "eval_source": eval_source, "eval_n": n_eval,
             "epochs": epoch_logs, "best_epoch": best_epoch,
             "metrics": metrics, "primary_metric": primary,
@@ -895,12 +1057,20 @@ def fit(config: dict, run_dir) -> dict:
               "n_test": n_eval, "best_epoch": best_epoch, "eval_source": eval_source})
         _plot_pred_true(yt, y_pred_full, _safe(run_dir, "pred_vs_true.png"))
         artifacts.append("pred_vs_true.png")
+        if task == "time_series_forecasting":
+            _plot_time_series(
+                yt, y_pred_full, data.get("target_name", "value"),
+                float(data.get("scale_mean", [0.0])[-1]),
+                float(data.get("scale_std", [1.0])[-1]),
+                _safe(run_dir, "forecast.png"),
+            )
+            artifacts.append("forecast.png")
         summary = {
             "task": task, "model": model_key, "model_label": cfg.get("model_label", model_key),
             "dataset_name": cfg.get("dataset_name"), "params": params, "engine": "torch",
             "n_train": len(data["train"].dataset), "n_val": len(data["val"].dataset),
             "n_test": len(data["test"].dataset) if data["test"] is not None else 0,
-            "split_scheme": "train/val/test" if data["test"] is not None and len(data["test"].dataset) else "train/val",
+            "split_scheme": data.get("split_scheme") or ("train/val/test" if data["test"] is not None and len(data["test"].dataset) else "train/val"),
             "eval_source": eval_source, "eval_n": n_eval,
             "epochs": epoch_logs, "best_epoch": best_epoch,
             "metrics": metrics, "primary_metric": primary,

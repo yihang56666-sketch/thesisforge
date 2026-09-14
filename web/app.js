@@ -6,9 +6,13 @@ const $ = (s, p = document) => p.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function api(path, opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs || 0);
+  const controller = timeoutMs ? new AbortController() : null;
+  if (controller) setTimeout(() => controller.abort(), timeoutMs);
   const res = await fetch(path, {
     headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {},
     ...opts,
+    signal: controller ? controller.signal : undefined,
     body: opts.body && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body,
   });
   let data = null;
@@ -147,7 +151,7 @@ const C = { teal: "#0d6e63", orange: "#c2410c", ink: "#1d2023", gray: "#9aa1a6",
 
 const state = {
   health: null, config: null, datasets: [], builtin: [], runs: [], reports: [],
-  train: { datasetId: "", task: "", model: "", params: {}, prep: null, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "", name: "", group: "baseline", note: "" },
+  train: { datasetId: "", task: "", model: "", params: {}, prep: null, testSize: 0.2, valSplit: 0.2, seed: 42, textColumn: "", target: "", name: "", group: "baseline", note: "", tuning: { n_trials: 8, metric: "primary_metric", search_mode: "tpe", results: null, loading: false } },
   openRun: null, openDataset: null, pollTimer: null,
   reportSelected: loadReportSel(), compareSel: loadCompareSel(),
 };
@@ -401,7 +405,7 @@ async function pageTrain() {
   }
   const ds = state.datasets.find((d) => d.id === t.datasetId);
   if (ds) {
-    const tasks = ds.type === "image" ? ["image_classification"] : ["tabular_classification", "tabular_regression", "text_classification"];
+    const tasks = ds.type === "image" ? ["image_classification"] : ["tabular_classification", "tabular_regression", "text_classification", "time_series_forecasting"];
     if (!tasks.includes(t.task)) t.task = ds.task && tasks.includes(ds.task) ? ds.task : tasks[0];
   }
   const taskDef = state.models[t.task];
@@ -455,6 +459,33 @@ async function pageTrain() {
     <div class="section"><h2>超参数</h2>
       <div class="panel"><div class="form-grid" id="tr-params-form"></div></div>
     </div>
+    <div class="section"><h2>自动调参</h2>
+      <div class="panel">
+        <div class="form-grid">
+          <div class="form-row"><label>搜索轮数</label>
+            <input id="tu-trials" type="number" min="2" max="200" value="${esc(t.tuning.n_trials)}" title="每个候选参数会真实训练一次"></div>
+          <div class="form-row"><label>评估指标</label>
+            <select id="tu-metric">
+              <option value="primary_metric" ${t.tuning.metric === "primary_metric" ? "selected" : ""}>主指标（推荐）</option>
+              <option value="accuracy" ${t.tuning.metric === "accuracy" ? "selected" : ""}>Accuracy</option>
+              <option value="f1" ${t.tuning.metric === "f1" ? "selected" : ""}>F1</option>
+              <option value="auc" ${t.tuning.metric === "auc" ? "selected" : ""}>AUC</option>
+              <option value="r2" ${t.tuning.metric === "r2" ? "selected" : ""}>R²</option>
+              <option value="rmse" ${t.tuning.metric === "rmse" ? "selected" : ""}>RMSE</option>
+            </select></div>
+          <div class="form-row"><label>搜索模式</label>
+            <select id="tu-mode">
+              <option value="tpe" ${t.tuning.search_mode === "tpe" ? "selected" : ""}>TPE 贝叶斯搜索（推荐）</option>
+              <option value="hyperband" ${t.tuning.search_mode === "hyperband" ? "selected" : ""}>Hyperband 剪枝</option>
+              <option value="grid" ${t.tuning.search_mode === "grid" ? "selected" : ""}>小规模网格</option>
+            </select></div>
+          <div class="form-row"><label>操作</label>
+            <button class="btn accent" id="btn-tuning">${t.tuning.loading ? "搜索中…" : "开始自动调参"}</button></div>
+        </div>
+        <div class="hint">自动调参会按当前模型和参数范围做本地搜索，每个候选都真实训练一次，结果不会自动加入普通实验列表。</div>
+        <div id="tu-results"></div>
+      </div>
+    </div>
     <div class="section"><h2>实验命名与分组</h2>
       <div class="panel">
         <div class="form-grid">
@@ -483,6 +514,23 @@ async function pageTrain() {
     }).join("");
   };
   renderParams();
+  const renderTuning = () => {
+    const tu = state.train.tuning;
+    const box = $("#tu-results");
+    if (!box) return;
+    if (!tu.results) { box.innerHTML = ""; return; }
+    const rows = (tu.results.history || []).map((h) => `
+      <tr><td>${h.number + 1}</td><td>${h.value === null || h.value === undefined ? "-" : esc(fmtNum(h.value))}</td><td>${esc(fmtParams(h.params))}</td></tr>
+    `).join("");
+    box.innerHTML = `
+      <div class="kv-row mt12">
+        <div class="kv"><b>${esc(fmtNum(tu.results.best_value))}</b>最佳分数</div>
+        <div class="kv"><b>#${tu.results.best_trial + 1}</b>最佳轮次</div>
+        <div class="kv"><b>${tu.results.history.length}</b>有效轮次</div>
+      </div>
+      <div class="table-scroll mt12"><table><thead><tr><th>轮次</th><th>分数</th><th>参数</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
+  renderTuning();
 
   $("#tr-ds").onchange = (e) => { state.train = { ...state.train, datasetId: e.target.value, task: "", model: "", target: "", textColumn: "" }; pageTrain(); };
   $("#tr-task").onchange = (e) => { state.train.task = e.target.value; state.train.model = ""; pageTrain(); };
@@ -499,6 +547,31 @@ async function pageTrain() {
     ? "图像任务按 训练 / 验证 / 测试 三份划分：权重只在训练集更新，best.pt 按验证集挑选，最终指标来自测试集（评估一次，不再回调）。固定随机种子保证可复现，论文里要写。"
     : "先划分再预处理：填充与标准化只在训练集上拟合，测试集只评估一次。固定随机种子保证实验可复现，论文里要写。";
   $("#tr-target").onchange = (e) => (state.train.target = e.target.value);
+  $("#tu-trials").onchange = (e) => (state.train.tuning.n_trials = parseInt(e.target.value) || 8);
+  $("#tu-metric").onchange = (e) => (state.train.tuning.metric = e.target.value);
+  $("#tu-mode").onchange = (e) => (state.train.tuning.search_mode = e.target.value);
+  $("#btn-tuning").onclick = async () => {
+    const btn = $("#btn-tuning");
+    btn.disabled = true; btn.textContent = "搜索中…";
+    state.train.tuning.loading = true;
+    try {
+      const body = {
+        dataset_id: state.train.datasetId, task: state.train.task, model: state.train.model,
+        params: state.train.params, target: state.train.target || null,
+        text_column: state.train.textColumn || null,
+        n_trials: state.train.tuning.n_trials,
+        metric: state.train.tuning.metric,
+        search_mode: state.train.tuning.search_mode,
+        seed: state.train.seed,
+      };
+      const r = await api("/api/tuning/search", { method: "POST", body, timeoutMs: 600000 });
+      state.train.tuning.results = r;
+      toast(`自动调参完成，最佳分数 ${fmtNum(r.best_value)}`, "success");
+    } catch (e) { toast(e.message, "error"); }
+    state.train.tuning.loading = false;
+    btn.disabled = false; btn.textContent = "开始自动调参";
+    renderTuning();
+  };
 
   if (t.task === "text_classification") {
     const box = $("#tr-textcol");

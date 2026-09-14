@@ -202,6 +202,50 @@ class LightTransformer(nn.Module):
         return self.fc(self.dropout(pooled))
 
 
+class TimeSeriesRNN(nn.Module):
+    """LSTM/GRU 时间序列回归：连续特征输入 -> RNN -> 未来 horizon 步。"""
+
+    def __init__(self, in_features, hidden_dim, num_layers, horizon,
+                 dropout=0.1, rnn_type="lstm"):
+        _, nn, _ = _torch()
+        super().__init__()
+        rnn_cls = nn.LSTM if rnn_type == "lstm" else nn.GRU
+        self.rnn = rnn_cls(
+            in_features, hidden_dim, num_layers=num_layers, batch_first=True,
+            dropout=float(dropout) if num_layers > 1 else 0.0,
+        )
+        self.dropout = nn.Dropout(float(dropout))
+        self.fc = nn.Linear(hidden_dim, horizon)
+
+    def forward(self, x):
+        out, _ = self.rnn(x)
+        return self.fc(self.dropout(out[:, -1, :]))
+
+
+class TimeSeriesTransformer(nn.Module):
+    """Transformer 时间序列回归：线性投影 + 位置编码 + Encoder 均值池化。"""
+
+    def __init__(self, in_features, d_model, nhead, num_layers, dim_feedforward,
+                 horizon, dropout=0.1, max_seq_len=512):
+        torch, nn, _ = _torch()
+        super().__init__()
+        self.input = nn.Linear(in_features, d_model)
+        self.pos = nn.Parameter(torch.zeros(1, max_seq_len, d_model))
+        nn.init.normal_(self.pos, std=0.02)
+        layer = nn.TransformerEncoderLayer(
+            d_model, nhead, dim_feedforward, dropout, activation="gelu", batch_first=True
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers)
+        self.dropout = nn.Dropout(float(dropout))
+        self.fc = nn.Linear(d_model, horizon)
+
+    def forward(self, x):
+        seq_len = x.size(1)
+        out = self.input(x) + self.pos[:, :seq_len, :]
+        out = self.encoder(out).mean(dim=1)
+        return self.fc(self.dropout(out))
+
+
 def build_resnet18(num_classes, pretrained=False, freeze_backbone=False):
     try:
         from torchvision import models
@@ -273,6 +317,26 @@ def build_model(task: str, model: str, params: dict | None = None, **dims: Any):
             return LightTransformer(num_tokens, d_model, nhead, num_layers, dim_ff,
                                     num_classes, dropout=dropout, max_seq_len=max_seq_len)
         raise ValueError(f"文本任务不支持的模型: {model}")
+    if task == "time_series_forecasting":
+        in_features = _int(dims.get("num_features"), 1, lo=1, hi=100000)
+        horizon = _int(p.get("horizon"), 1, lo=1, hi=128)
+        dropout = _float(p.get("dropout"), 0.1, 0.0, 0.95)
+        if model in ("lstm", "gru"):
+            return TimeSeriesRNN(
+                in_features, _int(p.get("hidden_dim"), 64, lo=8, hi=1024),
+                _int(p.get("num_layers"), 1, lo=1, hi=8), horizon,
+                dropout=dropout, rnn_type=model,
+            )
+        if model == "transformer":
+            return TimeSeriesTransformer(
+                in_features, _int(p.get("d_model"), 64, lo=16, hi=1024),
+                _int(p.get("nhead"), 4, lo=1, hi=16),
+                _int(p.get("num_layers"), 2, lo=1, hi=16),
+                _int(p.get("dim_feedforward"), 128, lo=32, hi=4096),
+                horizon, dropout=dropout,
+                max_seq_len=_int(p.get("lookback"), 12, lo=2, hi=512),
+            )
+        raise ValueError(f"时间序列不支持的模型: {model}")
     raise ValueError(f"未知任务类型: {task}")
 
 

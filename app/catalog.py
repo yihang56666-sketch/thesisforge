@@ -246,6 +246,54 @@ CATALOG: dict = {
             },
         },
     },
+    "time_series_forecasting": {
+        "label": "时间序列 · 预测",
+        "needs_target": True,
+        "needs_text_column": False,
+        "models": {
+            "lstm": {
+                "label": "LSTM 时间序列预测",
+                "desc": "长短期记忆网络，按历史滑窗预测未来序列，适合单变量/多变量时间序列。",
+                "engine": "torch",
+                "params": {
+                    "lookback": {"type": "int", "default": 12, "min": 2, "max": 512, "label": "回看窗口"},
+                    "horizon": {"type": "int", "default": 1, "min": 1, "max": 128, "label": "预测步数"},
+                    "hidden_dim": {"type": "int", "default": 64, "min": 8, "max": 1024, "label": "隐藏单元数"},
+                    "num_layers": {"type": "int", "default": 1, "min": 1, "max": 8, "label": "层数"},
+                    "dropout": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    **_TRAINING_PARAMS,
+                },
+            },
+            "gru": {
+                "label": "GRU 时间序列预测",
+                "desc": "门控循环单元，结构比 LSTM 更轻量，训练更快，适合作为时间序列对照模型。",
+                "engine": "torch",
+                "params": {
+                    "lookback": {"type": "int", "default": 12, "min": 2, "max": 512, "label": "回看窗口"},
+                    "horizon": {"type": "int", "default": 1, "min": 1, "max": 128, "label": "预测步数"},
+                    "hidden_dim": {"type": "int", "default": 64, "min": 8, "max": 1024, "label": "隐藏单元数"},
+                    "num_layers": {"type": "int", "default": 1, "min": 1, "max": 8, "label": "层数"},
+                    "dropout": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    **_TRAINING_PARAMS,
+                },
+            },
+            "transformer": {
+                "label": "Transformer 时间序列预测",
+                "desc": "自注意力序列模型，能建模较长时间依赖，适合作为深度对照模型。",
+                "engine": "torch",
+                "params": {
+                    "lookback": {"type": "int", "default": 12, "min": 2, "max": 512, "label": "回看窗口"},
+                    "horizon": {"type": "int", "default": 1, "min": 1, "max": 128, "label": "预测步数"},
+                    "d_model": {"type": "int", "default": 64, "min": 16, "max": 1024, "label": "模型维度"},
+                    "nhead": {"type": "int", "default": 4, "min": 1, "max": 16, "label": "注意力头数"},
+                    "num_layers": {"type": "int", "default": 2, "min": 1, "max": 16, "label": "层数"},
+                    "dim_feedforward": {"type": "int", "default": 128, "min": 32, "max": 4096, "label": "前馈维度"},
+                    "dropout": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.95, "label": "丢弃率"},
+                    **_TRAINING_PARAMS,
+                },
+            },
+        },
+    },
 }
 
 

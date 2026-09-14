@@ -127,7 +127,7 @@ function wizardTaskOptions(ds, catalog) {
   if (!ds) return keys;
   if (ds.type === "image") return keys.includes("image_classification") ? ["image_classification"] : keys;
   if (ds.task && keys.includes(ds.task)) return [ds.task];
-  return keys.filter((k) => k.startsWith("tabular_"));
+  return keys.filter((k) => k.startsWith("tabular_") || k === "time_series_forecasting");
 }
 
 function wizardDatasetBar(dsR) {
