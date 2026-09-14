@@ -15,18 +15,42 @@ import time
 import traceback
 from pathlib import Path
 
+from app.model_scanner import find_model_path
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+_WEIGHT_NAMES = {
+    "yolov8n": "yolov8n.pt",
+    "yolov8s": "yolov8s.pt",
+    "yolov8m": "yolov8m.pt",
+    "yolov8l": "yolov8l.pt",
+    "yolov8x": "yolov8x.pt",
+    "yolov8n-seg": "yolov8n-seg.pt",
+    "yolov8s-seg": "yolov8s-seg.pt",
+    "yolov8m-seg": "yolov8m-seg.pt",
+    "yolov8l-seg": "yolov8l-seg.pt",
+    "yolov8x-seg": "yolov8x-seg.pt",
+    "rtdetr-l": "rtdetr-l.pt",
+    "yolo26n": "yolo26n.pt",
+    "yolo26s": "yolo26s.pt",
+    "yolo26n-seg": "yolo26n-seg.pt",
+    "yolo26s-seg": "yolo26s-seg.pt",
+}
+
 
 def yolo_weights(model_key: str) -> str:
-    if model_key.startswith("yolov8n"):
-        return "yolov8n.pt" if "-seg" not in model_key else "yolov8n-seg.pt"
-    if model_key.startswith("yolov8s"):
-        return "yolov8s.pt" if "-seg" not in model_key else "yolov8s-seg.pt"
-    if model_key.startswith("rtdetr"):
-        return f"{model_key}.pt"
+    if model_key in _WEIGHT_NAMES:
+        return _WEIGHT_NAMES[model_key]
     raise ValueError(f"不支持的检测/分割模型: {model_key}")
+
+
+def find_model_weights(model_key: str, extra_dirs=None) -> str:
+    """优先使用用户本机已拷贝的权重，否则交给 Ultralytics 下载。"""
+    local = find_model_path(model_key, extra_dirs)
+    if local is not None:
+        return str(local)
+    return yolo_weights(model_key)
 
 
 def log(msg: str) -> None:
@@ -94,14 +118,15 @@ def main() -> int:
         data_yaml = materialize_data_yaml(dataset_dir, find_data_yaml(dataset_dir), run_dir)
         log(f"数据配置: {data_yaml}（path 已重写为数据集绝对路径）")
 
+        weights_cfg = cfg.get("weights_path")
+        weights = str(weights_cfg) if weights_cfg and Path(weights_cfg).is_file() else find_model_weights(model_key)
+
         if model_key.startswith("rtdetr"):
             from ultralytics import RTDETR
             model = RTDETR(weights)
         else:
             from ultralytics import YOLO
             model = YOLO(weights)
-
-        weights = yolo_weights(model_key)
         device = params.get("device", "auto")
         if device == "auto":
             import torch

@@ -483,7 +483,8 @@ async function pageTrain() {
         const m = taskDef.models[k];
         return `<div class="model-item ${k === t.model ? "selected" : ""}" data-model="${esc(k)}">
           <div class="m-row"><div class="m-name">${esc(m.label)}</div>${k === t.model ? '<span class="m-check">已选</span>' : ""}</div>
-          <div class="m-desc">${esc(m.desc)}</div></div>`;
+          <div class="m-desc">${esc(m.desc)}</div>
+          <div class="m-tag">${m.local ? "本机权重" : (m.engine === "torch" ? "神经网络" : "模型")}</div></div>`;
       }).join("")}</div>
     </div>
     <div class="section"><div class="section-head"><h2>超参数</h2><p>不改也能直接训练；想只改一两个变量时，其他字段保持推荐值即可。</p></div>

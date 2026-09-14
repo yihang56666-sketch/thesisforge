@@ -362,7 +362,7 @@ function wizardNetworkPane(dsR, modelsR) {
       return `<div class="model-item ${k === arch ? "selected" : ""}" data-warch="${esc(k)}">
         <div class="m-name">${esc(m.label)}</div>
         <div class="m-desc">${esc(m.desc)}</div>
-        <div class="m-tag">${m.engine === "torch" ? "神经网络" : "机器学习基线"}</div></div>`;
+        <div class="m-tag">${m.local ? "本机权重" : (m.engine === "torch" ? "神经网络" : "机器学习基线")}</div></div>`;
     }).join("")}</div>` : '<div class="hint">当前任务类型没有可用模型，请先检查数据集。</div>'}
     <b class="t mt14">网络结构参数</b>
     <div class="form-grid">${structureParams.length ? structureParams.map(([k, ps]) => row(k, ps)).join("")
