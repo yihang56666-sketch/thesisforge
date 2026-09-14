@@ -322,6 +322,8 @@ def _load_tabular(config: dict, st: dict, device, emit):
     return {
         "train": loaders[0], "val": loaders[1], "test": loaders[2],
         "num_features": int(Xn_tr.shape[1]),
+        "preprocessor": pre,
+        "num_classes": len(cls2idx) if cls2idx else 1,
         "classes": sorted(cls2idx) if cls2idx else None,
         "class_counts": {str(k): int(v) for k, v in (class_counts or {}).items()},
         "n": len(df),
@@ -397,6 +399,8 @@ def _load_text(config: dict, st: dict, device, emit):
     return {
         "train": loaders[0], "val": loaders[1], "test": loaders[2],
         "num_tokens": len(vocab), "max_seq_len": seq_len,
+        "vocab": vocab,
+        "num_classes": len(cls2idx),
         "classes": sorted(cls2idx),
         "class_counts": {str(k): int(v) for k, v in y_raw.value_counts().items()},
         "n": len(df),
@@ -474,6 +478,7 @@ def _load_image(config: dict, st: dict, device, emit):
     return {
         "train": train_loader, "val": val_loader, "test": test_loader,
         "classes": classes, "class_counts": counts, "num_classes": len(classes),
+        "image_size": size,
         "n": n_total,
         "demo": {
             "kind": "image",
@@ -604,6 +609,9 @@ def _save_best(net, data: dict, epoch: int, val_metric: float, path: Path, task:
         "state_dict": net.state_dict(), "epoch": int(epoch),
         "val_metric": float(val_metric),
         "classes": data.get("classes"),
+        "num_classes": data.get("num_classes"),
+        "vocab": data.get("vocab"),
+        "preprocessor": data.get("preprocessor"),
         "num_features": data.get("num_features"),
         "num_tokens": data.get("num_tokens"),
         "max_seq_len": data.get("max_seq_len"),
@@ -905,6 +913,16 @@ def fit(config: dict, run_dir) -> dict:
             "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+    try:
+        from app.export_predict import write_predict_script
+
+        write_predict_script(run_dir, "torch", cfg)
+        if "predict.py" not in artifacts:
+            artifacts.append("predict.py")
+        summary["artifacts"] = artifacts
+        _log("已生成推理脚本: predict.py")
+    except Exception as e:
+        _log(f"推理脚本生成跳过: {e}")
     _write_json(_safe(run_dir, "summary.json"), summary)
     emit({"type": "summary", "primary_metric": primary, "metrics": metrics})
     _write_json(_safe(run_dir, "status.json"),

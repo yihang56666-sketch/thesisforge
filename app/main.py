@@ -681,9 +681,11 @@ def run_artifact(run_id: str, fname: str):
     except ValueError as e:
         raise HTTPException(400, str(e))
     p = (d / fname).resolve()
-    if not p.is_relative_to(d.resolve()) or p.suffix not in (".png", ".pt", ".pkl", ".json") or not p.exists():
+    if not p.is_relative_to(d.resolve()) or p.suffix not in (".png", ".pt", ".pkl", ".json", ".py") or not p.exists():
         raise HTTPException(404, "文件不存在")
-    media = "image/png" if p.suffix == ".png" else "application/octet-stream"
+    media = "image/png" if p.suffix == ".png" else (
+        "text/x-python; charset=utf-8" if p.suffix == ".py" else "application/octet-stream"
+    )
     return FileResponse(p, media_type=media, filename=p.name)
 
 

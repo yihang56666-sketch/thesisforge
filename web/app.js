@@ -634,8 +634,9 @@ async function openRun(id, silent = false) {
           { name: "val_acc", color: C.ink, points: epochRows.map((e) => e.val_acc) },
         ], { xLabel: "epoch" })}</div>` : ""}
         ${cvScores && cvScores.length ? `<div class="mt14">${lineChart([{ name: "交叉验证得分", color: C.teal, points: cvScores }], { xLabel: "折" })}</div>` : ""}
-        ${d.artifacts && d.artifacts.length ? `<div class="figure-grid mt14">${d.artifacts.map((f) => `
-          <figure><img src="/api/runs/${esc(id)}/artifacts/${esc(f)}" loading="lazy"><figcaption>${esc(f.replace(".png", ""))}</figcaption></figure>`).join("")}</div>` : ""}
+        ${d.artifacts && d.artifacts.length ? `<div class="figure-grid mt14">${d.artifacts.map((f) => f.endsWith(".png") ? `
+          <figure><img src="/api/runs/${esc(id)}/artifacts/${esc(f)}" loading="lazy"><figcaption>${esc(f.replace(".png", ""))}</figcaption></figure>` : `
+          <figure><a class="btn small" href="/api/runs/${esc(id)}/artifacts/${esc(f)}" download>下载 ${esc(f)}</a><figcaption>${esc(f)}</figcaption></figure>`).join("")}</div>` : ""}
         <div class="mt14" id="run-ai-out"></div>
         <hr class="sep"><b class="small">运行日志</b> <span class="muted small">${running ? "每 2.5 秒自动刷新" : ""}</span>
         <div class="log-box mt8" id="run-log">${esc(d.log_tail || "（暂无日志）")}</div>

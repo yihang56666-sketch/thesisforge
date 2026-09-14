@@ -6,6 +6,7 @@ import json
 import math
 import unittest
 import uuid
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -101,6 +102,8 @@ class TrainerTest(unittest.TestCase):
         self.assertTrue((d / "best.pt").exists())
         self.assertTrue((d / "curves.png").exists())
         self.assertTrue((d / "confusion_matrix.png").exists())
+        self.assertTrue((d / "predict.py").exists())
+        self.assertIn("predict.py", summary["artifacts"])
 
     def test_all_optimizers_available(self):
         for opt in ("sgd", "sgd_momentum", "adam", "adamw", "rmsprop"):
@@ -168,6 +171,11 @@ class TrainerTest(unittest.TestCase):
         _write_run(cfg, d)
         self._fit(cfg, d)
         self.assertEqual(json.loads((d / "status.json").read_text(encoding="utf-8"))["state"], "done")
+        import torch
+
+        ckpt = torch.load(d / "best.pt", map_location="cpu", weights_only=False)
+        self.assertIn("vocab", ckpt)
+        self.assertTrue(ckpt["vocab"])
 
         d2 = _run_dir("reg")
         csv2 = d2 / "dataset.csv"
@@ -204,6 +212,56 @@ class TrainerTest(unittest.TestCase):
         self.assertNotEqual(rc2, 0)
         status2 = json.loads((d2 / "status.json").read_text(encoding="utf-8"))
         self.assertEqual(status2["state"], "failed")
+
+    def test_exported_predict_script_can_infer(self):
+        """导出的 predict.py 必须能独立加载模型并对新样本给出预测。"""
+        import subprocess
+        import sys
+
+        d = _run_dir("predict-export")
+        csv = d / "dataset.csv"
+        _classification_csv(csv)
+        cfg = _base_cfg(csv, params={
+            "hidden_sizes": "8", "dropout": 0.0, "optimizer": "adam",
+            "lr": 0.01, "batch_size": 8, "epochs": 1,
+        })
+        _write_run(cfg, d)
+        self._fit(cfg, d)
+        self.assertTrue((d / "predict.py").exists())
+
+        sample = d / "sample.csv"
+        pd.DataFrame([{"x1": 1.0, "x2": 0.5, "cat": "a"}]).to_csv(sample, index=False)
+        proc = subprocess.run(
+            [sys.executable, str(d / "predict.py"), "--input", str(sample)],
+            capture_output=True, text=True, timeout=300, cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        payload = json.loads(proc.stdout.strip())
+        self.assertIn("predicted_label", payload)
+
+    def test_exported_text_predict_script_can_infer(self):
+        import subprocess
+        import sys
+
+        d = _run_dir("predict-export-text")
+        csv = d / "dataset.csv"
+        _text_csv(csv)
+        cfg = _base_cfg(csv, task="text_classification", model="textcnn", params={
+            "embedding_dim": 8, "num_filters": 4, "kernel_sizes": "2,3",
+            "dropout": 0.0, "optimizer": "adam", "lr": 0.01,
+            "batch_size": 8, "epochs": 1, "max_seq_len": 16, "vocab_size": 200,
+        })
+        _write_run(cfg, d)
+        self._fit(cfg, d)
+        self.assertTrue((d / "predict.py").exists())
+
+        proc = subprocess.run(
+            [sys.executable, str(d / "predict.py"), "--text", "很好 优秀"],
+            capture_output=True, text=True, timeout=300, cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        payload = json.loads(proc.stdout.strip())
+        self.assertIn("predicted_label", payload)
 
 
 if __name__ == "__main__":

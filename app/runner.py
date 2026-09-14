@@ -316,7 +316,9 @@ def run_detail(run_id: str) -> dict:
     status = read_status(run_id)
     summary = read_summary(run_id)
     meta = read_meta(run_id)
-    artifacts = sorted([p.name for p in run_dir.iterdir() if p.suffix == ".png"])
+    artifacts = sorted([p.name for p in run_dir.iterdir()
+                        if p.suffix in (".png", ".py", ".pt", ".pkl")
+                        and not p.name.startswith(".")])
     return {
         "run_id": run_id,
         "state": status.get("state"),

@@ -305,6 +305,16 @@ def main() -> int:
         summary["artifacts"] = artifacts
         summary["train_time_sec"] = round(time.time() - t0, 1)
         summary["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            from app.export_predict import write_predict_script
+
+            write_predict_script(run_dir, "sklearn", cfg)
+            if "predict.py" not in artifacts:
+                artifacts.append("predict.py")
+            summary["artifacts"] = artifacts
+            log("已生成推理脚本: predict.py")
+        except Exception as e:
+            log(f"推理脚本生成跳过: {e}")
         write_json(safe(run_dir, "summary.json"), summary)
         emit({"type": "summary", "primary_metric": summary["primary_metric"], "metrics": metrics})
         log(f"全部完成，用时 {summary['train_time_sec']}s")
