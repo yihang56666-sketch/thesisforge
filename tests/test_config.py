@@ -9,6 +9,9 @@ from app import config
 
 
 class DataDirIsolationTest(unittest.TestCase):
+    def test_release_version_is_current(self):
+        self.assertEqual(config.APP_VERSION, "0.5.2")
+
     def test_data_dir_points_to_test_tmp(self):
         self.assertEqual(config.DATA_DIR, _isolate.TEST_TMP)
 
