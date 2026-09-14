@@ -195,6 +195,27 @@ class ReportResearchDepthTest(unittest.TestCase):
 
         self.assertTrue(any("图 4-1 至 图 4-" in t and "CNN" in t for t in texts))
 
+    def test_report_generates_task_aware_english_abstract_and_methodology(self):
+        runs = [
+            {
+                "run_id": "base", "name": "基线", "group": "baseline",
+                "config": {"task": "object_detection", "model": "yolov8n",
+                           "model_label": "YOLOv8n", "group": "baseline", "params": {}},
+                "summary": {"model_label": "YOLOv8n", "group": "baseline",
+                            "primary_metric": {"name": "mAP50", "value": 0.82},
+                            "metrics": {"mAP50": 0.82}, "eval_source": "test"},
+            },
+        ]
+        dataset_meta = {"name": "示例航拍检测集", "columns": [], "target": "bbox"}
+        out = Path(tempfile.mkdtemp()) / "report.docx"
+        build_report(out, "Deep Learning Based Object Detection", {}, dataset_meta, None, runs, {})
+        doc = Document(str(out))
+        texts = [p.text for p in doc.paragraphs]
+
+        self.assertTrue(any("This thesis" in t and "0.8200" in t and "YOLOv8n" in t for t in texts))
+        self.assertTrue(any("object detection" in t.lower() and "mAP50" in t for t in texts))
+        self.assertTrue(any("bbox" in t and "mAP50" in t and "验证集" in t for t in texts))
+
 
 if __name__ == "__main__":
     unittest.main()

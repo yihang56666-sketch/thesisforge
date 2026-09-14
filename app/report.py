@@ -310,6 +310,70 @@ def _conclusion_text(dataset_meta: dict | None, runs: list[dict]) -> str:
     return lead + result + "未来可在更大规模数据、更细粒度标注与模型解释方面继续完善。"
 
 
+def _english_abstract_text(title: str, dataset_meta: dict | None, runs: list[dict]) -> str:
+    """Generate a concrete English abstract from real run metadata."""
+    if not runs:
+        return ""
+    dataset_name = (dataset_meta or {}).get("name")
+    lead = (f"This thesis investigates {title} on the {dataset_name} dataset." if dataset_name
+            else f"This thesis investigates {title}.")
+    results: list[str] = []
+    for run in runs:
+        name, value = _primary_metric(run)
+        source = {"test": "independent test set", "val": "validation set"}.get(
+            (run.get("summary") or {}).get("eval_source"), "evaluation set"
+        )
+        label = (run.get("summary") or {}).get("model_label", "selected")
+        results.append(
+            f"The {label} model achieves a primary metric {name} of {value:.4f} on the {source}."
+        )
+    return (lead + " The experiments cover data preprocessing, model training, quantitative "
+            "evaluation, and visualization analysis. " + " ".join(results))
+
+
+def _task_methodology_notes(runs: list[dict]) -> list[str]:
+    """按任务家族补充实验设计说明，避免报告只写通用流程。"""
+    tasks: list[str] = []
+    for run in runs:
+        task = (run.get("config") or {}).get("task")
+        if task and task not in tasks:
+            tasks.append(task)
+
+    notes: list[str] = []
+    task_notes = {
+        "object_detection": (
+            "目标检测实验采用 YOLO 格式标注，其中 bbox 标注用于界定目标区域；"
+            "评价统一报告 mAP50 与 mAP50-95。验证集用于模型与超参数选择，"
+            "测试集仅在最终评估时使用一次，避免结果选择偏置。"
+        ),
+        "semantic_segmentation": (
+            "像素级语义分割实验要求图像与掩码逐像素对齐，评价以 IoU、Dice 和 pixel accuracy 为主；"
+            "验证集用于选择最优权重，测试集用于报告最终边界与区域重叠性能。"
+        ),
+        "image_classification": (
+            "图像分类实验采用训练、验证、测试三段划分；训练阶段使用随机翻转、颜色扰动等增强，"
+            "评价报告准确率与宏平均 F1，并辅以混淆矩阵定位主要误分类类别。"
+        ),
+        "text_classification": (
+            "文本分类实验先完成清洗、分词与词表构建，再使用嵌入层表示文本；"
+            "评价以准确率和宏平均 F1 为主，必要时按类别检查精确率与召回率。"
+        ),
+        "tabular_classification": (
+            "表格分类实验对数值特征执行缺失填充与标准化，对类别特征执行编码；"
+            "所有拟合操作只在训练集或训练折内完成，评价使用准确率、宏平均 F1 与 ROC-AUC，"
+            "并通过交叉验证检查稳定性。"
+        ),
+        "time_series_forecasting": (
+            "时间序列预测实验按时间顺序划分训练、验证与测试集，避免随机划分导致未来信息泄漏；"
+            "评价以 MAE、RMSE 和 MAPE 为主，并结合预测曲线检查滞后与趋势误差。"
+        ),
+    }
+    for task in tasks:
+        if task in task_notes:
+            notes.append(task_notes[task])
+    return notes
+
+
 def _repeat_notes(runs: list[dict]) -> list[str]:
     """汇总同一 batch 的重复实验，帮助判断性能波动是否可接受。"""
     grouped: dict[str, list[dict]] = {}
@@ -502,10 +566,14 @@ def build_report(
 
     # ---------------- 英文摘要
     _heading(doc, "Abstract", 1)
-    _para(doc, "This thesis investigates the application of machine learning methods on the selected "
-               "dataset, covering data collection and preprocessing, baseline model construction, "
-               "comparative experiments, and visualized result analysis. Replace this paragraph with "
-               "your own English abstract before submission.", east="Times New Roman")
+    english_abstract = _english_abstract_text(title, dataset_meta, runs)
+    if not english_abstract:
+        english_abstract = ("This thesis investigates the application of machine learning methods "
+                            "on the selected dataset, covering data collection and preprocessing, "
+                            "baseline model construction, comparative experiments, and visualized "
+                            "result analysis. Replace this paragraph with your own English abstract "
+                            "before submission.")
+    _para(doc, english_abstract, east="Times New Roman")
     p = doc.add_paragraph(); p.paragraph_format.line_spacing = 1.5
     _font(p.add_run("Key words: machine learning; graduation design; model evaluation"), "Times New Roman", 12, bold=True)
     doc.add_page_break()
@@ -618,6 +686,8 @@ def build_report(
     except Exception:
         pass
     _three_line_table(doc, ["项目", "配置"], env_rows, caption="表 4-1  实验环境")
+    for note in _task_methodology_notes(runs):
+        _para(doc, note)
     if runs:
         rows = []
 
