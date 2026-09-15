@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, catalog, datasets_hub, experiments, humanize, onboarding, prep, report, runner, tuning
+from . import ai, catalog, datasets_hub, experiments, humanize, model_scanner, onboarding, prep, report, runner, tuning
 from .report_readiness import report_readiness
 from .config import (
     APP_VERSION, DATA_DIR, DATASETS_DIR, EXPORTS_DIR, RUNS_DIR, WEB_DIR,
@@ -520,7 +520,7 @@ async def analyze_dataset(ds_id: str):
 # ================================================================ 模型目录
 @app.get("/api/models")
 def get_models():
-    return {"catalog": catalog.CATALOG}
+    return {"catalog": model_scanner.build_local_catalog(), "local_models": model_scanner.scan_local_models()}
 
 
 class TuningReq(BaseModel):
@@ -538,7 +538,10 @@ class TuningReq(BaseModel):
 def tuning_search(req: TuningReq):
     spec = catalog.get_model_spec(req.task, req.model)
     if not spec:
-        raise HTTPException(400, "未知任务或模型")
+        if req.task in ("object_detection", "semantic_segmentation"):
+            spec = model_scanner.get_local_model_spec(req.task, req.model)
+        if not spec:
+            raise HTTPException(400, "未知任务或模型")
     try:
         ds_meta = datasets_hub.load_meta(req.dataset_id)
     except FileNotFoundError:
@@ -558,6 +561,7 @@ def tuning_search(req: TuningReq):
         "task": req.task,
         "model": req.model,
         "model_label": spec["label"],
+        "weights_path": spec.get("weights_path"),
         "params": clean_params,
         "target": target,
         "test_size": 0.2,
@@ -604,7 +608,10 @@ def create_run(req: CreateRunReq):
         raise HTTPException(400, "未知任务类型")
     spec = catalog.get_model_spec(req.task, req.model)
     if not spec:
-        raise HTTPException(400, "未知模型")
+        if req.task in ("object_detection", "semantic_segmentation"):
+            spec = model_scanner.get_local_model_spec(req.task, req.model)
+        if not spec:
+            raise HTTPException(400, "未知模型")
     try:
         ds_meta = datasets_hub.load_meta(req.dataset_id)
     except FileNotFoundError:
@@ -632,6 +639,7 @@ def create_run(req: CreateRunReq):
             raise HTTPException(400, "请在高级选项中选择文本列与标签列")
 
     engine = spec.get("engine") or "sklearn"
+    weights_path = spec.get("weights_path")
     script = {"torch": "train_torch.py", "ultralytics": "train_detection.py"}.get(engine, "train_sklearn.py")
     if task == "semantic_segmentation" and engine == "torch" and req.model == "unet":
         script = "train_semantic.py"

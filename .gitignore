@@ -25,6 +25,7 @@ scripts/_wizard_*.png
 # Local experiment outputs and pretrained weights
 runs/
 yolov8n.pt
+yolo26*.pt
 
 # Generated QA sheets / draft reports
 docs/_*.png
