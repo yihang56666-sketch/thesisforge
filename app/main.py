@@ -538,7 +538,10 @@ class TuningReq(BaseModel):
 def tuning_search(req: TuningReq):
     spec = catalog.get_model_spec(req.task, req.model)
     if not spec:
-        raise HTTPException(400, "未知任务或模型")
+        if req.task in ("object_detection", "semantic_segmentation"):
+            spec = model_scanner.get_local_model_spec(req.task, req.model)
+        if not spec:
+            raise HTTPException(400, "未知任务或模型")
     try:
         ds_meta = datasets_hub.load_meta(req.dataset_id)
     except FileNotFoundError:
@@ -558,7 +561,7 @@ def tuning_search(req: TuningReq):
         "task": req.task,
         "model": req.model,
         "model_label": spec["label"],
-        "weights_path": weights_path,
+        "weights_path": spec.get("weights_path"),
         "params": clean_params,
         "target": target,
         "test_size": 0.2,

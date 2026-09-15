@@ -44,7 +44,7 @@ CONFIG_FILE = DATA_DIR / "runtime_config.json"
 PROJECT_FILE = DATA_DIR / "project.json"
 LAUNCH_LOG = DATA_DIR / "logs" / "launch.log"
 
-APP_VERSION = "0.5.2"
+APP_VERSION = "0.5.3"
 
 DEFAULT_RUNTIME_CONFIG: dict = {
     # OpenAI 兼容接口地址，如 https://api.deepseek.com/v1
